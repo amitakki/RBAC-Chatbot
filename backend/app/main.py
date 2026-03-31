@@ -19,13 +19,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routers are registered here as each epic is completed:
-# from app.health.router import router as health_router   # Epic 3
-# from app.auth.router import router as auth_router       # Epic 4
-# from app.chat.router import router as chat_router       # Epic 3
-# app.include_router(health_router)
+# Routers — registered as each epic is completed:
+from app.health.router import router as health_router   # Epic 3 ✓
+# from app.auth.router import router as auth_router     # Epic 4
+from app.chat.router import router as chat_router       # Epic 3 ✓
+
+app.include_router(health_router)                       # /health, /ready
 # app.include_router(auth_router, prefix="/auth")
-# app.include_router(chat_router, prefix="/chat")
+app.include_router(chat_router, prefix="/chat")         # /chat/
 
 
 @app.get("/", tags=["root"])

@@ -13,6 +13,7 @@ from fastapi import Depends
 from qdrant_client import QdrantClient
 
 from app.config import settings
+from ingest.embedder import Embedder
 
 
 def get_qdrant_client() -> QdrantClient:
@@ -20,4 +21,11 @@ def get_qdrant_client() -> QdrantClient:
     return QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
 
 
+def get_embedder_dep() -> Embedder:
+    """Return the process-wide Embedder singleton."""
+    from app.rag.embedder import get_embedder  # local import avoids circular at module load
+    return get_embedder()
+
+
 QdrantDep = Annotated[QdrantClient, Depends(get_qdrant_client)]
+EmbedderDep = Annotated[Embedder, Depends(get_embedder_dep)]
