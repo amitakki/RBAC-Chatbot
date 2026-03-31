@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     # Data
     data_dir: str = "../data"
 
+    # RAG pipeline
+    groq_model: str = "llama-3.1-70b-versatile"
+    groq_timeout_seconds: int = 10
+    retrieval_top_k: int = 5
+    retrieval_score_threshold: float = 0.60
+    enable_query_rewrite: bool = False
+
     @property
     def is_local(self) -> bool:
         return self.environment == "local"
