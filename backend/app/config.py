@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     retrieval_score_threshold: float = 0.60
     enable_query_rewrite: bool = False
 
+    # Guardrails
+    injection_similarity_threshold: float = 0.85
+    scope_similarity_threshold: float = 0.35
+
     @property
     def is_local(self) -> bool:
         return self.environment == "local"
