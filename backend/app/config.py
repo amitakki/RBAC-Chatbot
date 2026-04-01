@@ -54,7 +54,7 @@ class Settings(BaseSettings):
 
     # Guardrails
     injection_similarity_threshold: float = 0.85
-    scope_similarity_threshold: float = 0.35
+    scope_similarity_threshold: float = 0.05
 
     @property
     def is_local(self) -> bool:
