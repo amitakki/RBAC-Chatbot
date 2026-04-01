@@ -49,6 +49,13 @@ def parse_args() -> argparse.Namespace:
         default=REPORT_DIR,
         help="Directory to write the answers JSON file (default: evals/report/)",
     )
+    p.add_argument(
+        "--subset",
+        choices=["finance", "hr", "marketing", "engineering", "executive"],
+        default=None,
+        metavar="ROLE",
+        help="Run only pairs for a specific role (default: all roles)",
+    )
     return p.parse_args()
 
 
@@ -70,9 +77,12 @@ def acquire_tokens(base_url: str) -> dict[str, str]:
     return tokens
 
 
-def run(base_url: str, output_dir: Path) -> Path:
+def run(base_url: str, output_dir: Path, subset: str | None = None) -> Path:
     dataset = load_golden_dataset()
     pairs = [p for p in dataset["pairs"] if p["eval_type"] == "reference_required"]
+    if subset:
+        pairs = [p for p in pairs if p["required_role"] == subset]
+        print(f"Subset filter: running only '{subset}' pairs ({len(pairs)} total)")
     total = len(pairs)
     print(f"\nGenerating answers for {total} reference-required pairs against {base_url}\n")
 
@@ -148,7 +158,7 @@ def run(base_url: str, output_dir: Path) -> Path:
 
 def main() -> None:
     args = parse_args()
-    run(args.base_url, args.output_dir)
+    run(args.base_url, args.output_dir, subset=args.subset)
 
 
 if __name__ == "__main__":
