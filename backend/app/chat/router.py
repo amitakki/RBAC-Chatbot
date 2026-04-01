@@ -18,6 +18,7 @@ from app.dependencies import CurrentUser, RedisDep
 router = APIRouter(tags=["chat"])
 
 
+@router.post("", response_model=ChatResponse, include_in_schema=False)
 @router.post("/", response_model=ChatResponse, summary="Submit a question to the RAG assistant")
 async def chat_endpoint(
     request: ChatRequest,

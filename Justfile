@@ -1,8 +1,9 @@
-# FinSolve AI Assistant — Developer Commands
+# FinSolve AI Assistant - Developer Commands
 # Install just: https://github.com/casey/just
 # Usage: just <recipe>
 
 set dotenv-load := true
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 # Show available commands
 default:
@@ -12,9 +13,13 @@ default:
 # Docker Compose
 # ---------------------------------------------------------------------------
 
-# Start all services (detached)
+# Start infrastructure only (Qdrant + Redis) in Docker
 up:
-    docker compose up -d
+    docker compose up -d qdrant redis
+
+# Start the full Docker stack, including backend and frontend containers
+up-full:
+    docker compose --profile app up -d
 
 # Start only infrastructure (Qdrant + Redis), no app containers
 infra:
@@ -42,7 +47,7 @@ log service:
 
 # Rebuild and restart all containers
 rebuild:
-    docker compose up -d --build
+    docker compose --profile app up -d --build
 
 # ---------------------------------------------------------------------------
 # Data Ingestion
@@ -50,15 +55,15 @@ rebuild:
 
 # Ingest all documents (incremental upsert)
 ingest:
-    docker compose exec backend uv run python -m ingest.ingest
+    cd backend; uv run python -m ingest.ingest
 
 # Drop Qdrant collection and re-ingest from scratch
 ingest-reset:
-    docker compose exec backend uv run python -m ingest.ingest --reset
+    cd backend; uv run python -m ingest.ingest --reset
 
 # Dry-run: show chunk counts without writing to Qdrant
 ingest-dry:
-    docker compose exec backend uv run python -m ingest.ingest --dry-run
+    cd backend; uv run python -m ingest.ingest --dry-run
 
 # ---------------------------------------------------------------------------
 # Backend
@@ -66,15 +71,15 @@ ingest-dry:
 
 # Install Python dependencies locally (for IDE support)
 install:
-    cd backend && uv sync
+    cd backend; uv sync
 
 # Run backend locally (outside Docker)
 dev-backend:
-    cd backend && uv run uvicorn app.main:app --reload --port 8000
+    cd backend; uv run uvicorn app.main:app --reload --port 8000
 
 # Open an interactive shell in the running backend container
 shell:
-    docker compose exec backend bash
+    docker compose --profile app exec backend bash
 
 # ---------------------------------------------------------------------------
 # Frontend
@@ -82,15 +87,15 @@ shell:
 
 # Install Node dependencies
 install-frontend:
-    cd frontend && npm install
+    cd frontend; npm install
 
 # Run frontend dev server locally (outside Docker)
 dev-frontend:
-    cd frontend && npm run dev
+    cd frontend; npm run dev
 
 # Build frontend for production
 build-frontend:
-    cd frontend && npm run build
+    cd frontend; npm run build
 
 # ---------------------------------------------------------------------------
 # Testing
@@ -98,15 +103,15 @@ build-frontend:
 
 # Run all unit tests
 test:
-    cd backend && uv run pytest tests/unit -v
+    cd backend; uv run pytest tests/unit -v
 
 # Run integration tests (requires running Qdrant + Redis)
 test-integration:
-    cd backend && uv run pytest tests/integration -v
+    cd backend; uv run pytest tests/integration -v
 
 # Run all tests with coverage report
 test-cov:
-    cd backend && uv run pytest tests/ --cov=app --cov-report=term-missing
+    cd backend; uv run pytest tests/ --cov=app --cov-report=term-missing
 
 # ---------------------------------------------------------------------------
 # Linting & Formatting
@@ -114,11 +119,11 @@ test-cov:
 
 # Lint Python code
 lint:
-    cd backend && uv run ruff check .
+    cd backend; uv run ruff check .
 
 # Format Python code
 fmt:
-    cd backend && uv run ruff format .
+    cd backend; uv run ruff format .
 
 # ---------------------------------------------------------------------------
 # Evaluation
@@ -126,11 +131,11 @@ fmt:
 
 # Run Ragas evaluation suite against staging endpoint
 eval:
-    cd backend && uv run python -m evals.run_ragas
+    cd backend; uv run python -m evals.run_ragas
 
 # Run RBAC boundary tests
 test-rbac:
-    cd backend && uv run pytest evals/rbac_boundary_tests.py -v
+    cd backend; uv run pytest evals/rbac_boundary_tests.py -v
 
 # ---------------------------------------------------------------------------
 # Utilities
@@ -138,7 +143,7 @@ test-rbac:
 
 # Copy .env.example to .env (first-time setup)
 init:
-    cp -n .env.example .env && echo ".env created — fill in GROQ_API_KEY and JWT_SECRET"
+    if (-not (Test-Path .env)) { Copy-Item .env.example .env; Write-Output ".env created - fill in GROQ_API_KEY and JWT_SECRET" } else { Write-Output ".env already exists" }
 
 # Generate a random JWT secret
 gen-secret:

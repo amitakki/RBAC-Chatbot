@@ -27,14 +27,21 @@ cp .env.example .env
 # Edit .env — minimum required:
 #   GROQ_API_KEY=<your key from console.groq.com>
 #   JWT_SECRET=<generate: python -c "import secrets; print(secrets.token_hex(32))">
+#   HF_TOKEN=<optional; useful for Hugging Face model downloads/rate limits>
 
-# 3. Start all services (Qdrant + Redis + Backend + Frontend)
+# 3. Start infrastructure in Docker
 just up
 
-# 4. Ingest source documents into Qdrant (first time only)
+# 4. Run the backend locally
+just dev-backend
+
+# 5. Run the frontend locally
+just dev-frontend
+
+# 6. Ingest source documents into Qdrant (first time only)
 just ingest-reset
 
-# 5. Open the app
+# 7. Open the app
 open http://localhost:3000
 ```
 
@@ -69,13 +76,14 @@ Full API docs available at `http://localhost:8000/docs` in local/staging.
 
 ---
 
-## Local Development (without Docker)
+## Local Development
 
 ```bash
 # Backend
 cd backend
 uv sync
-cp ../.env.example .env   # fill required vars
+# Uses ../.env from the repository root
+# Expects Qdrant and Redis on localhost, typically via `just infra`
 uv run uvicorn app.main:app --reload
 
 # Frontend
@@ -84,10 +92,19 @@ npm install
 npm run dev
 ```
 
-> Qdrant and Redis still need to be running. Start them via Docker:
+> Qdrant and Redis still run in Docker. Start them with:
 > ```bash
 > docker compose up qdrant redis -d
 > ```
+
+`HF_TOKEN` is optional for the default public embedding model, but recommended if
+you hit Hugging Face download limits or switch to a gated/private model.
+
+If you want the full Docker stack instead, use:
+
+```bash
+just up-full
+```
 
 ---
 
@@ -95,7 +112,8 @@ npm run dev
 
 ```bash
 just init             # Copy .env.example → .env (first time)
-just up               # Start all services
+just up               # Start Qdrant + Redis only
+just up-full          # Start the full Docker stack
 just ingest-reset     # Drop collection + re-ingest all docs
 just ingest           # Incremental ingest (upsert only)
 just test             # Unit tests

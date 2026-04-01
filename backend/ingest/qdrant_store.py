@@ -8,7 +8,6 @@ Responsibilities:
 """
 
 from __future__ import annotations
-
 import uuid
 from datetime import datetime, timezone
 
@@ -27,6 +26,7 @@ SCHEMA_VERSION = "1"
 
 # Number of points per upsert batch
 _UPSERT_BATCH = 100
+_POINT_ID_NAMESPACE = uuid.UUID("12345678-1234-5678-1234-567812345678")
 
 
 def init_collection(
@@ -89,7 +89,7 @@ def batch_upsert(
         payload["text"] = chunk["text"]
         points.append(
             PointStruct(
-                id=str(uuid.uuid4()),
+                id=str(uuid.uuid5(_POINT_ID_NAMESPACE, payload["doc_id"])),
                 vector=vector,
                 payload=payload,
             )

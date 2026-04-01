@@ -1,9 +1,15 @@
+from pathlib import Path
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+ROOT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ROOT_ENV_FILE,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -46,15 +52,23 @@ class Settings(BaseSettings):
     data_dir: str = "../data"
 
     # RAG pipeline
-    groq_model: str = "llama-3.1-70b-versatile"
+    groq_model: str = "llama-3.3-70b-versatile"
     groq_timeout_seconds: int = 10
     retrieval_top_k: int = 5
-    retrieval_score_threshold: float = 0.60
+    retrieval_score_threshold: float = 0.55
     enable_query_rewrite: bool = False
 
     # Guardrails
     injection_similarity_threshold: float = 0.85
     scope_similarity_threshold: float = 0.05
+
+    @field_validator("qdrant_api_key", "langsmith_api_key", mode="before")
+    @classmethod
+    def empty_strings_to_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            cleaned = value.split("#", 1)[0].strip()
+            return cleaned or None
+        return value
 
     @property
     def is_local(self) -> bool:

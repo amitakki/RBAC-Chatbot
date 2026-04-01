@@ -6,6 +6,6 @@ export async function sendMessage(
   session_id?: string,
 ): Promise<ChatResponse> {
   const payload: ChatRequest = { question, session_id }
-  const { data } = await apiClient.post<ChatResponse>('/api/chat', payload)
+  const { data } = await apiClient.post<ChatResponse>('/api/chat/', payload)
   return data
 }

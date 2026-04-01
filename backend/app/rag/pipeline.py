@@ -10,6 +10,7 @@ and LANGSMITH_API_KEY are set in the environment.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -24,6 +25,8 @@ from app.guardrails import GuardBlockedError, apply_output_guard, check_input
 from app.rag.embedder import get_embedder
 from app.rag.prompts.prompt_loader import load_system_prompt
 from app.rag.retriever import RbacRetriever, RetrievedChunk
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -81,6 +84,7 @@ def _call_llm_with_retry(llm: ChatGroq, prompt: str) -> str | None:
             response = llm.invoke([HumanMessage(content=prompt)])
             return response.content
         except Exception:
+            logger.exception("Groq call failed on attempt %s/2", attempt + 1)
             if attempt == 0:
                 time.sleep(2)
     return None

@@ -12,16 +12,15 @@ export function useAuth() {
   }, [clearUser])
 
   const login = useCallback(
-    async (username: string, password: string) => {
-      const response = await apiLogin(username, password)
+    async (displayUsername: string, authUsername: string, authPassword: string) => {
+      const response = await apiLogin(authUsername, authPassword)
       const expiresAt = Date.now() + response.expires_in * 1000
       setUser({
-        user_id: username,
+        user_id: displayUsername,
         role: response.role,
         token: response.access_token,
         expires_at: expiresAt,
       })
-      // Auto-logout when token expires
       timerRef.current = setTimeout(logout, response.expires_in * 1000)
     },
     [setUser, logout],

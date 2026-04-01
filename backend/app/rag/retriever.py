@@ -71,13 +71,14 @@ class RbacRetriever:
         )
 
         try:
-            results = self._client.search(
+            response = self._client.query_points(
                 collection_name=self._collection,
-                query_vector=vector,
+                query=vector,
                 query_filter=role_filter,
                 limit=settings.retrieval_top_k,
                 score_threshold=settings.retrieval_score_threshold,
             )
+            results = response.points
         except (UnexpectedResponse, Exception) as exc:
             raise RetrieverUnavailableError(
                 f"Qdrant search failed: {exc}"
