@@ -20,10 +20,10 @@ from langchain_groq import ChatGroq
 from langsmith import traceable
 
 from app.config import settings
+from app.guardrails import GuardBlockedError, apply_output_guard, check_input
 from app.rag.embedder import get_embedder
 from app.rag.prompts.prompt_loader import load_system_prompt
-from app.rag.retriever import RbacRetriever, RetrievedChunk, RetrieverUnavailableError
-
+from app.rag.retriever import RbacRetriever, RetrievedChunk
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -113,6 +113,14 @@ def run_rag(
     run_id = str(uuid.uuid4())
     start_ms = time.monotonic()
 
+    # Input guardrails (injection → scope → PII)
+    guard = check_input(query, user_role)
+    if guard.blocked:
+        raise GuardBlockedError(
+            reason=guard.reason or "guardrail_blocked",
+            message=guard.message or "Your query could not be processed.",
+        )
+
     # Build LLM client once (shared with optional rewriter)
     llm = ChatGroq(
         model=settings.groq_model,
@@ -167,6 +175,11 @@ def run_rag(
         if c.source_file not in seen:
             seen.add(c.source_file)
             sources.append(c.source_file)
+
+    # Output guardrails (PII redaction + source boundary enforcement)
+    guard_out = apply_output_guard(answer, sources, user_role)
+    answer = guard_out.answer
+    sources = guard_out.sources
 
     result = RagResult(
         answer=answer,

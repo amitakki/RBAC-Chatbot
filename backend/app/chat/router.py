@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.chat.schemas import ChatRequest, ChatResponse
 from app.dependencies import CurrentUser
+from app.guardrails import GuardBlockedError
 from app.rag.pipeline import run_rag
 from app.rag.retriever import RetrieverUnavailableError
 
@@ -41,12 +42,20 @@ async def chat_endpoint(request: ChatRequest, user_context: CurrentUser) -> Chat
             request.question,
             user_context.role,
         )
+    except GuardBlockedError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": exc.reason, "message": exc.message},
+        )
     except RetrieverUnavailableError:
         raise HTTPException(
             status_code=503,
             detail={
                 "error": "search_unavailable",
-                "message": "The search service is temporarily unavailable. Please try again shortly.",
+                "message": (
+                    "The search service is temporarily unavailable. "
+                    "Please try again shortly."
+                ),
                 "request_id": request_id,
             },
         )
