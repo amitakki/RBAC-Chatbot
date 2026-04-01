@@ -84,6 +84,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    # RC-127: structured JSON logs from the backend are written to stdout.
+    # In ECS production the task definition uses the awslogs driver to ship
+    # logs to CloudWatch log group /finsolve/backend (configured via Terraform
+    # in modules/ecs/ — Epic 10). Local dev uses json-file for log rotation.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 

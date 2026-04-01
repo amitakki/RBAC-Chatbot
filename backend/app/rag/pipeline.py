@@ -40,6 +40,7 @@ class RagResult:
     top_score: float
     run_id: str
     prompt_version: str = field(default_factory=lambda: settings.prompt_version)
+    tokens_used: int | None = None   # total tokens from Groq usage_metadata (RC-123)
 
 
 # ---------------------------------------------------------------------------
@@ -77,17 +78,47 @@ def _build_prompt(
     return prompt
 
 
-def _call_llm_with_retry(llm: ChatGroq, prompt: str) -> str | None:
-    """Call the LLM; retry once on failure. Returns None if both attempts fail."""
+def _call_llm_with_retry(
+    llm: ChatGroq, prompt: str
+) -> tuple[str | None, int | None]:
+    """Call the LLM; retry once on failure.
+
+    Returns:
+        (content, total_tokens) — content is None if both attempts fail;
+        total_tokens is None when usage metadata is absent.
+    """
     for attempt in range(2):
         try:
             response = llm.invoke([HumanMessage(content=prompt)])
-            return response.content
+            tokens: int | None = None
+            um = getattr(response, "usage_metadata", None)
+            if um:
+                tokens = um.get("total_tokens")
+            return response.content, tokens
         except Exception:
             logger.exception("Groq call failed on attempt %s/2", attempt + 1)
             if attempt == 0:
                 time.sleep(2)
-    return None
+    return None, None
+
+
+def _anonymize_excerpt(text: str, max_chars: int = 200) -> str:
+    """Presidio-anonymized excerpt of text, truncated to max_chars (RC-124).
+
+    Reuses the Presidio singletons from output_guard to avoid loading spacy twice.
+    Best-effort — returns a plain truncated excerpt on any error.
+    """
+    truncated = text[:max_chars]
+    try:
+        from app.guardrails.output_guard import _get_analyzer, _get_anonymizer  # noqa: PLC0415
+        analyzer = _get_analyzer()
+        anonymizer = _get_anonymizer()
+        results = analyzer.analyze(text=truncated, language="en")
+        if results:
+            return anonymizer.anonymize(text=truncated, analyzer_results=results).text
+    except Exception:
+        pass
+    return truncated
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +151,19 @@ def run_rag(
     # Input guardrails (injection → scope → PII)
     guard = check_input(query, user_role)
     if guard.blocked:
+        # RC-123: annotate BEFORE raising so the trace captures the block reason
+        try:
+            import langsmith as _ls
+            _rt = _ls.get_current_run_tree()
+            if _rt is not None:
+                _rt.metadata.update({
+                    "guardrail_triggered": True,
+                    "guardrail_reason": guard.reason or "guardrail_blocked",
+                    "user_role": user_role,
+                    "latency_ms": int((time.monotonic() - start_ms) * 1000),
+                })
+        except Exception:
+            pass
         raise GuardBlockedError(
             reason=guard.reason or "guardrail_blocked",
             message=guard.message or "Your query could not be processed.",
@@ -166,7 +210,7 @@ def run_rag(
     prompt = _build_prompt(template, user_role, query, chunks, history_window or None)
 
     # LLM call with one retry
-    answer = _call_llm_with_retry(llm, prompt)
+    answer, tokens_used = _call_llm_with_retry(llm, prompt)
     if answer is None:
         answer = (
             "The assistant is temporarily unavailable. Please try again shortly."
@@ -191,22 +235,33 @@ def run_rag(
         num_chunks=len(chunks),
         top_score=chunks[0].score,
         run_id=run_id,
+        tokens_used=tokens_used,
     )
 
-    # Annotate LangSmith trace with RAG metadata
+    # RC-123/124: Annotate LangSmith trace with RAG metadata and chunk excerpts
     try:
         import langsmith
         run_tree = langsmith.get_current_run_tree()
         if run_tree is not None:
-            run_tree.metadata.update(
+            run_tree.metadata.update({
+                "user_role": user_role,
+                "prompt_version": settings.prompt_version,
+                "num_chunks": result.num_chunks,
+                "top_score": result.top_score,
+                "latency_ms": int((time.monotonic() - start_ms) * 1000),
+                "tokens_used": result.tokens_used,
+                "guardrail_triggered": False,
+                "environment": settings.environment,
+            })
+            # RC-124: chunk excerpts — Presidio-anonymized, max 200 chars
+            run_tree.metadata["chunk_excerpts"] = [
                 {
-                    "user_role": user_role,
-                    "prompt_version": settings.prompt_version,
-                    "num_chunks": result.num_chunks,
-                    "top_score": result.top_score,
-                    "latency_ms": int((time.monotonic() - start_ms) * 1000),
+                    "source": c.source_file,
+                    "excerpt": _anonymize_excerpt(c.text),
+                    "score": round(c.score, 4),
                 }
-            )
+                for c in chunks
+            ]
     except Exception:
         pass  # tracing is best-effort; never fail the user request
 
