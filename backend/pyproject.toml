@@ -49,6 +49,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "black>=24.0",
+    "fakeredis>=2.23",      # in-process Redis for unit tests (RC-103, RC-107)
 ]
 evals = [
     "ragas>=0.1",

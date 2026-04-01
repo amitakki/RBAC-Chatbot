@@ -4,10 +4,12 @@ Shared FastAPI dependency providers.
 # Component ownership:
 # - get_current_user   : Epic 4 (RBAC & Auth)      ← implemented here
 # - get_qdrant_client  : Epic 2 (Ingestion) / Epic 3 (RAG)
-# - get_redis_client   : Epic 6 (Memory & Rate Limiting)
+# - get_redis_client   : Epic 6 (Memory & Rate Limiting)  ← implemented here
 
+from functools import lru_cache
 from typing import Annotated
 
+import redis as redis_lib
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from qdrant_client import QdrantClient
@@ -35,6 +37,23 @@ def get_embedder_dep() -> Embedder:
 
 QdrantDep = Annotated[QdrantClient, Depends(get_qdrant_client)]
 EmbedderDep = Annotated[Embedder, Depends(get_embedder_dep)]
+
+# ---------------------------------------------------------------------------
+# Redis (Epic 6)
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def get_redis_client() -> redis_lib.Redis:
+    """Return a Redis client configured from settings.
+
+    Uses an lru_cache so the same connection pool is reused across requests.
+    decode_responses=False keeps bytes intact for JSON-serialised session entries.
+    """
+    return redis_lib.from_url(settings.redis_url, decode_responses=False)
+
+
+RedisDep = Annotated[redis_lib.Redis, Depends(get_redis_client)]
 
 # ---------------------------------------------------------------------------
 # JWT auth (Epic 4)
