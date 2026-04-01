@@ -1,19 +1,25 @@
 """
 Shared FastAPI dependency providers.
-Implementations are filled in by their respective epics.
 """
-# Stubs — each will be implemented in the epic that owns the component:
-# - get_current_user   : Epic 4 (RBAC & Auth)
-# - get_qdrant_client  : Epic 2 (Ingestion) / Epic 3 (RAG)  ← implemented here
+# Component ownership:
+# - get_current_user   : Epic 4 (RBAC & Auth)      ← implemented here
+# - get_qdrant_client  : Epic 2 (Ingestion) / Epic 3 (RAG)
 # - get_redis_client   : Epic 6 (Memory & Rate Limiting)
 
 from typing import Annotated
 
 from fastapi import Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from qdrant_client import QdrantClient
 
+from app.auth.schemas import UserContext
+from app.auth.service import verify_jwt
 from app.config import settings
 from ingest.embedder import Embedder
+
+# ---------------------------------------------------------------------------
+# Qdrant & Embedder (Epic 2 / 3)
+# ---------------------------------------------------------------------------
 
 
 def get_qdrant_client() -> QdrantClient:
@@ -29,3 +35,24 @@ def get_embedder_dep() -> Embedder:
 
 QdrantDep = Annotated[QdrantClient, Depends(get_qdrant_client)]
 EmbedderDep = Annotated[Embedder, Depends(get_embedder_dep)]
+
+# ---------------------------------------------------------------------------
+# JWT auth (Epic 4)
+# ---------------------------------------------------------------------------
+
+
+_bearer = HTTPBearer()
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+) -> UserContext:
+    """Verify the Bearer JWT and return the authenticated UserContext.
+
+    Raises HTTP 401 if the token is missing, malformed, or expired.
+    """
+    payload = verify_jwt(credentials.credentials)
+    return UserContext(user_id=payload["sub"], role=payload["role"])
+
+
+CurrentUser = Annotated[UserContext, Depends(get_current_user)]
