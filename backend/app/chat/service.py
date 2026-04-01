@@ -9,12 +9,15 @@ Execution order:
     3. Load session history     from Redis
     4. Run RAG pipeline         in thread pool (non-blocking)
     5. Save human+AI turn       to Redis (only on success)
-    6. Annotate LangSmith trace with session metadata
-    7. Return ChatResponse
+    6. RC-126: structured JSON request log (all exit paths)
+    7. Annotate LangSmith trace with session metadata
+    8. Return ChatResponse
 """
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 import uuid
 
 import redis as redis_lib
@@ -28,6 +31,8 @@ from app.memory.session import get_history, save_turn
 from app.rag.pipeline import RagResult, run_rag
 from app.rag.retriever import RetrieverUnavailableError
 from app.rate_limit.limiter import check_and_increment, get_hourly_limit
+
+logger = logging.getLogger(__name__)
 
 
 async def handle_chat(
@@ -51,6 +56,7 @@ async def handle_chat(
         HTTPException(500): Unexpected internal error.
     """
     request_id = str(uuid.uuid4())
+    _start_ms = time.monotonic()
 
     # ------------------------------------------------------------------
     # 1. Rate limit — hourly (per-role)
@@ -107,11 +113,29 @@ async def handle_chat(
             session_history,
         )
     except GuardBlockedError as exc:
+        _log_chat_request(
+            request_id=request_id,
+            user_id=user_context.user_id,
+            role=user_context.role,
+            guardrail_outcome=f"blocked:{exc.reason}",
+            num_chunks=None,
+            latency_ms=int((time.monotonic() - _start_ms) * 1000),
+            tokens_used=None,
+        )
         raise HTTPException(
             status_code=400,
             detail={"error": exc.reason, "message": exc.message},
         )
     except RetrieverUnavailableError:
+        _log_chat_request(
+            request_id=request_id,
+            user_id=user_context.user_id,
+            role=user_context.role,
+            guardrail_outcome="retriever_unavailable",
+            num_chunks=None,
+            latency_ms=int((time.monotonic() - _start_ms) * 1000),
+            tokens_used=None,
+        )
         raise HTTPException(
             status_code=503,
             detail={
@@ -124,6 +148,15 @@ async def handle_chat(
             },
         )
     except Exception:
+        _log_chat_request(
+            request_id=request_id,
+            user_id=user_context.user_id,
+            role=user_context.role,
+            guardrail_outcome="error",
+            num_chunks=None,
+            latency_ms=int((time.monotonic() - _start_ms) * 1000),
+            tokens_used=None,
+        )
         raise HTTPException(
             status_code=500,
             detail={
@@ -139,7 +172,20 @@ async def handle_chat(
     save_turn(redis, session_id, request.question, result.answer)
 
     # ------------------------------------------------------------------
-    # 6. Annotate LangSmith trace with session + memory metadata
+    # 6. RC-126: structured success log
+    # ------------------------------------------------------------------
+    _log_chat_request(
+        request_id=request_id,
+        user_id=user_context.user_id,
+        role=user_context.role,
+        guardrail_outcome="pass",
+        num_chunks=result.num_chunks,
+        latency_ms=int((time.monotonic() - _start_ms) * 1000),
+        tokens_used=result.tokens_used,
+    )
+
+    # ------------------------------------------------------------------
+    # 7. Annotate LangSmith trace with session + memory metadata
     # ------------------------------------------------------------------
     _annotate_langsmith(
         session_id=session_id,
@@ -149,7 +195,7 @@ async def handle_chat(
     )
 
     # ------------------------------------------------------------------
-    # 7. Return response
+    # 8. Return response
     # ------------------------------------------------------------------
     return ChatResponse(
         answer=result.answer,
@@ -162,6 +208,37 @@ async def handle_chat(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _log_chat_request(
+    *,
+    request_id: str,
+    user_id: str,
+    role: str,
+    guardrail_outcome: str,
+    num_chunks: int | None,
+    latency_ms: int,
+    tokens_used: int | None,
+) -> None:
+    """Emit a structured JSON log record for every chat request (RC-126).
+
+    Fields are CloudWatch Insights-filterable:
+    - guardrail_outcome: "pass" | "blocked:<reason>" | "retriever_unavailable" | "error"
+    - num_chunks: None for blocked/error paths where retrieval never ran
+    - tokens_used: None when the LLM was not invoked
+    """
+    logger.info(
+        "chat_request",
+        extra={
+            "request_id": request_id,
+            "user_id": user_id,
+            "role": role,
+            "guardrail_outcome": guardrail_outcome,
+            "num_chunks": num_chunks,
+            "latency_ms": latency_ms,
+            "tokens_used": tokens_used,
+        },
+    )
+
 
 def _annotate_langsmith(
     session_id: str,
