@@ -152,7 +152,7 @@ def run(answers_file_arg: Path | None, output_dir: Path) -> bool:
     from ragas.llms import LangchainLLMWrapper
 
     llm = LangchainLLMWrapper(
-        ChatGroq(model="llama-3.1-70b-versatile", api_key=groq_api_key)
+        ChatGroq(model="llama-3.3-70b-versatile", api_key=groq_api_key)
     )
     embeddings = LangchainEmbeddingsWrapper(
         HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
