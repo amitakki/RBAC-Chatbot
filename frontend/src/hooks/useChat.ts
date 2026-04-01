@@ -37,7 +37,7 @@ export function useChat() {
       setMessages((prev) => [...prev, aiMsg])
     },
     onError: (err) => {
-      setError(err as ApiError)
+      setError(err as unknown as ApiError)
     },
   })
 
