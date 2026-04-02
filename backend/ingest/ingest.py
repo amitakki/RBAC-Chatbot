@@ -1,5 +1,5 @@
 """
-Data Ingestion CLI — EPIC 2 / RC-64
+Data Ingestion CLI - EPIC 2 / RC-64
 
 Usage (from backend/ directory):
     uv run python -m ingest.ingest
@@ -36,16 +36,16 @@ log = logging.getLogger(__name__)
 
 # Ordered list of (relative path from data_dir, source filename)
 DOCUMENTS: list[tuple[str, str]] = [
-    ("finance/financial_summary.md",          "financial_summary.md"),
+    ("finance/financial_summary.md", "financial_summary.md"),
     ("finance/quarterly_financial_report.md", "quarterly_financial_report.md"),
-    ("general/employee_handbook.md",          "employee_handbook.md"),
-    ("hr/hr_data.csv",                        "hr_data.csv"),
+    ("general/employee_handbook.md", "employee_handbook.md"),
+    ("hr/hr_data.csv", "hr_data.csv"),
     ("engineering/engineering_master_doc.md", "engineering_master_doc.md"),
-    ("marketing/marketing_report_2024.md",    "marketing_report_2024.md"),
+    ("marketing/marketing_report_2024.md", "marketing_report_2024.md"),
     ("marketing/marketing_report_q1_2024.md", "marketing_report_q1_2024.md"),
     ("marketing/marketing_report_q2_2024.md", "marketing_report_q2_2024.md"),
     ("marketing/marketing_report_q3_2024.md", "marketing_report_q3_2024.md"),
-    ("marketing/market_report_q4_2024.md",    "market_report_q4_2024.md"),
+    ("marketing/market_report_q4_2024.md", "market_report_q4_2024.md"),
 ]
 
 
@@ -59,18 +59,32 @@ def _chunk_file(file_path: Path) -> list[dict]:
 
 
 def run(reset: bool = False, dry_run: bool = False) -> None:
+    log.info("Starting ingest (reset=%s, dry_run=%s)", reset, dry_run)
     data_root = Path(settings.data_dir).resolve()
     collection = settings.qdrant_collection
     embedding_model = settings.embedding_model
+    log.info(
+        "Resolved settings: data_root=%s collection=%s embedding_model=%s",
+        data_root,
+        collection,
+        embedding_model,
+    )
 
+    log.info("Initializing embedder for model '%s'", embedding_model)
     embedder = Embedder(model_name=embedding_model)
     client: QdrantClient | None = None
 
     if not dry_run:
+        qdrant_t0 = time.perf_counter()
+        log.info("Connecting to Qdrant at %s", settings.qdrant_url)
         client = QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
+        log.info("Initializing collection '%s' (reset=%s)", collection, reset)
         init_collection(client, collection, embedding_model, reset=reset)
         log.info(
-            "Collection '%s' ready (reset=%s)", collection, reset
+            "Collection '%s' ready (reset=%s) in %.2fs",
+            collection,
+            reset,
+            time.perf_counter() - qdrant_t0,
         )
 
     total_chunks = 0
@@ -79,27 +93,51 @@ def run(reset: bool = False, dry_run: bool = False) -> None:
 
     for rel_path, filename in DOCUMENTS:
         file_path = data_root / rel_path
+        log.info("Processing file '%s' at %s", filename, file_path)
         if not file_path.exists():
             log.warning("File not found, skipping: %s", file_path)
             continue
 
+        chunk_t0 = time.perf_counter()
+        log.info("Chunking '%s'", filename)
         chunks = _chunk_file(file_path)
         n = len(chunks)
+        chunk_elapsed = time.perf_counter() - chunk_t0
         total_chunks += n
         total_docs += 1
+        log.info("Chunked '%s' into %d chunks in %.2fs", filename, n, chunk_elapsed)
 
         if dry_run:
-            log.info("[dry-run] %s → %d chunks (no upsert)", filename, n)
+            log.info("[dry-run] %s -> %d chunks (no upsert)", filename, n)
             continue
 
         texts = [c["text"] for c in chunks]
+        embed_t0 = time.perf_counter()
+        log.info("Embedding %d chunks for '%s'", len(texts), filename)
         vectors = embedder.embed_batch(texts)
+        embed_elapsed = time.perf_counter() - embed_t0
+        log.info(
+            "Embedded %d chunks for '%s' in %.2fs",
+            len(vectors),
+            filename,
+            embed_elapsed,
+        )
+
+        upsert_t0 = time.perf_counter()
+        log.info("Upserting %d vectors for '%s' into '%s'", len(vectors), filename, collection)
         upserted = batch_upsert(client, collection, chunks, vectors)  # type: ignore[arg-type]
-        log.info("%s → %d chunks embedded & upserted ✓", filename, upserted)
+        upsert_elapsed = time.perf_counter() - upsert_t0
+        log.info(
+            "%s -> %d chunks embedded and upserted (embed=%.2fs upsert=%.2fs)",
+            filename,
+            upserted,
+            embed_elapsed,
+            upsert_elapsed,
+        )
 
     elapsed = time.perf_counter() - t0
     log.info(
-        "Done. docs=%d  chunks=%d  model=%s  collection=%s  elapsed=%.1fs",
+        "Done. docs=%d chunks=%d model=%s collection=%s elapsed=%.1fs",
         total_docs,
         total_chunks,
         embedding_model,

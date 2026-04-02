@@ -65,6 +65,16 @@ dev = [
     "pytest-cov>=7.1.0",
 ]
 
+# ---------------------------------------------------------------------------
+# Force CPU-only PyTorch on all platforms.
+# The default PyPI wheel bundles CUDA DLLs (~114 MB on Windows) that Windows
+# Defender scans on every import, causing 60-120 s hangs.  The CPU wheel from
+# PyTorch's own index has no CUDA DLLs and imports in < 5 s.
+# ---------------------------------------------------------------------------
+[tool.uv]
+preview = true
+torch-backend = "cpu"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

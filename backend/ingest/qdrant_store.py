@@ -2,7 +2,7 @@
 Qdrant collection management and batch upsert.
 
 Responsibilities:
-  - Create or reset the vector collection (cosine, 384 dims)
+  - Create or reset the vector collection (cosine, configured dims)
   - Store embedding model version as a special metadata point (id=0)
   - Batch-upsert chunk vectors with full payload
 """
@@ -18,7 +18,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from ingest.embedder import EMBEDDING_DIMS
+from app.config import settings
 
 # Version bump this when the embedding model or schema changes
 EMBEDDING_MODEL_VERSION = "1.0.0"
@@ -50,7 +50,7 @@ def init_collection(
     if collection_name not in existing:
         client.create_collection(
             collection_name=collection_name,
-            vectors_config=VectorParams(size=EMBEDDING_DIMS, distance=Distance.COSINE),
+            vectors_config=VectorParams(size=settings.embedding_dims, distance=Distance.COSINE),
         )
 
     # Upsert the metadata sentinel point (zero vector, id=0)
@@ -59,7 +59,7 @@ def init_collection(
         points=[
             PointStruct(
                 id=0,
-                vector=[0.0] * EMBEDDING_DIMS,
+                vector=[0.0] * settings.embedding_dims,
                 payload={
                     "_type":                 "collection_metadata",
                     "embedding_model":        embedding_model,

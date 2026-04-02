@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     # Embedding & Prompts
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_dims: int = 384
+    hf_token: str | None = None
     prompt_version: str = "v1"
 
     # Application
@@ -62,7 +64,7 @@ class Settings(BaseSettings):
     injection_similarity_threshold: float = 0.85
     scope_similarity_threshold: float = 0.05
 
-    @field_validator("qdrant_api_key", "langsmith_api_key", mode="before")
+    @field_validator("qdrant_api_key", "langsmith_api_key", "hf_token", mode="before")
     @classmethod
     def empty_strings_to_none(cls, value: object) -> object:
         if isinstance(value, str):
