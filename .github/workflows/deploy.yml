@@ -1,0 +1,108 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    name: Build, Push & Deploy
+    runs-on: ubuntu-latest
+
+    # RC-140: GitHub Environment enforces required reviewer gate for production
+    environment: ${{ github.event.inputs.environment }}
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # RC-139: authenticate to AWS via OIDC (no static keys)
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # RC-141: build Docker image with sha + latest tags
+      - name: Build Docker image
+        env:
+          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
+        run: |
+          docker build \
+            --tag "${ECR_REPOSITORY_URL}:sha-${{ github.sha }}" \
+            --tag "${ECR_REPOSITORY_URL}:latest" \
+            --file backend/Dockerfile \
+            backend/
+
+      # RC-141: push both tags to ECR
+      - name: Push Docker image to ECR
+        env:
+          ECR_REPOSITORY_URL: ${{ secrets.ECR_REPOSITORY_URL }}
+        run: |
+          docker push "${ECR_REPOSITORY_URL}:sha-${{ github.sha }}"
+          docker push "${ECR_REPOSITORY_URL}:latest"
+
+      # RC-141: update ECS service to deploy new image
+      - name: Update ECS service
+        run: |
+          aws ecs update-service \
+            --cluster "${{ secrets.ECS_CLUSTER }}" \
+            --service "${{ secrets.ECS_SERVICE }}" \
+            --force-new-deployment \
+            --region "${{ vars.AWS_REGION }}"
+
+      - name: Wait for ECS service to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ secrets.ECS_CLUSTER }}" \
+            --services "${{ secrets.ECS_SERVICE }}" \
+            --region "${{ vars.AWS_REGION }}"
+
+      # RC-142: smoke test — poll /health up to 2 min, then check /ready
+      - name: Smoke test
+        env:
+          STAGING_API_URL: ${{ secrets.STAGING_API_URL }}
+        run: |
+          BASE_URL="${STAGING_API_URL}"
+          MAX_ATTEMPTS=24
+          SLEEP_SECONDS=5
+
+          echo "Polling ${BASE_URL}/health for up to $((MAX_ATTEMPTS * SLEEP_SECONDS))s ..."
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/health" || echo "000")
+            echo "Attempt ${i}/${MAX_ATTEMPTS}: HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "/health returned 200"
+              break
+            fi
+            if [ "$i" = "$MAX_ATTEMPTS" ]; then
+              echo "ERROR: /health did not return 200 after $((MAX_ATTEMPTS * SLEEP_SECONDS))s"
+              exit 1
+            fi
+            sleep "$SLEEP_SECONDS"
+          done
+
+          echo "Checking /ready ..."
+          READY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/ready" || echo "000")
+          echo "/ready returned HTTP ${READY_STATUS}"
+          if [ "$READY_STATUS" != "200" ]; then
+            echo "ERROR: /ready returned ${READY_STATUS} — downstream dependency unavailable"
+            exit 1
+          fi
+          echo "Smoke test passed."

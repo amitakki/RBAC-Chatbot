@@ -1,0 +1,84 @@
+name: Eval Gate
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  eval-gate:
+    name: Staging Evaluation Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies (evals extra)
+        working-directory: backend
+        run: uv sync --frozen --extra evals
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-minilm-${{ hashFiles('evals/run_ragas.py') }}
+
+      # RC-136: generate answers from staging
+      - name: Generate answers from staging
+        working-directory: backend
+        env:
+          STAGING_API_URL: ${{ secrets.STAGING_API_URL }}
+        run: |
+          uv run python ../evals/generate_answers.py \
+            --base-url "$STAGING_API_URL" \
+            --output-dir ../evals/report
+
+      # RC-136: run Ragas evaluation — exits 1 if any metric below threshold
+      - name: Run Ragas evaluation
+        working-directory: backend
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          uv run python ../evals/run_ragas.py \
+            --output-dir ../evals/report
+
+      # RC-137: RBAC boundary tests (25 cross-role scenarios)
+      - name: Run RBAC boundary tests
+        working-directory: backend
+        env:
+          STAGING_API_URL: ${{ secrets.STAGING_API_URL }}
+        run: |
+          uv run python ../evals/rbac_boundary_tests.py \
+            --base-url "$STAGING_API_URL"
+
+      # RC-137: guardrail tests (8 GUARD-* scenarios)
+      - name: Run guardrail tests
+        working-directory: backend
+        env:
+          STAGING_API_URL: ${{ secrets.STAGING_API_URL }}
+        run: |
+          uv run python ../evals/guardrail_tests.py \
+            --base-url "$STAGING_API_URL"
+
+      # RC-138: upload Ragas report as artifact (always, even on failure)
+      - name: Upload Ragas report artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ragas-report-${{ github.sha }}
+          path: evals/report/ragas_*.json
+          retention-days: 30
