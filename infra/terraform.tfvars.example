@@ -1,0 +1,47 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# terraform.tfvars.example
+# Copy this file to terraform.tfvars and fill in the real values.
+# NEVER commit terraform.tfvars — it is listed in .gitignore.
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── General ───────────────────────────────────────────────────────────────────
+
+aws_region  = "us-east-1"
+environment = "staging"   # or "production"
+app_name    = "finsolve"
+
+# ── Networking ─────────────────────────────────────────────────────────────────
+
+vpc_cidr             = "10.0.0.0/16"
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
+availability_zones   = ["us-east-1a", "us-east-1b"]
+
+# ── ECS / Compute ──────────────────────────────────────────────────────────────
+
+backend_image_tag    = "latest"
+ecs_task_cpu         = 1024   # 1 vCPU
+ecs_task_memory      = 2048   # 2 GB
+ecs_desired_count    = 1
+ecs_min_capacity     = 1
+ecs_max_capacity     = 4
+ecs_cpu_scale_target = 70     # scale out at 70% CPU utilisation
+
+# ACM certificate ARN for HTTPS. Leave empty ("") for HTTP-only (staging without domain).
+certificate_arn = ""
+
+# ── Redis / ElastiCache ────────────────────────────────────────────────────────
+
+redis_node_type      = "cache.t3.micro"
+redis_engine_version = "7.2"
+
+# ── Monitoring ─────────────────────────────────────────────────────────────────
+
+log_retention_days = 30
+alert_email        = ""   # set to ops team email to receive SNS alarm notifications
+
+# ── Amplify / Frontend ─────────────────────────────────────────────────────────
+
+amplify_github_repo  = "https://github.com/YOUR_ORG/RBAC-Chatbot"
+amplify_branch       = "main"
+amplify_github_token = "ghp_REPLACE_ME"   # GitHub PAT with repo scope — NEVER commit the real token
