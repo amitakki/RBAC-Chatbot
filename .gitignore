@@ -208,3 +208,16 @@ __marimo__/
 
 # node
 node_modules/
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+terraform.tfvars.json
+*.tfplan
+*.tfstate
+*.tfstate.backup
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
