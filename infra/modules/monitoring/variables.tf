@@ -37,3 +37,35 @@ variable "alert_email" {
   type        = string
   default     = ""
 }
+
+# ── Cost & Token Usage (RC-146, RC-147, RC-148, RC-149) ───────────────────────
+
+variable "token_usage_namespace" {
+  description = "CloudWatch custom metric namespace used by the backend for token/cost metrics"
+  type        = string
+  default     = "FinSolveAI/TokenUsage"
+}
+
+variable "daily_cost_threshold_usd" {
+  description = "USD amount at which the HighDailyCost alarm fires (daily EstimatedCostUSD sum)"
+  type        = number
+  default     = 5
+}
+
+variable "hourly_query_threshold" {
+  description = "Number of requests per hour at which the HighHourlyQueries alarm fires"
+  type        = number
+  default     = 200
+}
+
+variable "token_per_request_threshold" {
+  description = "Maximum tokens per single request before the AbnormalTokenUsage alarm fires"
+  type        = number
+  default     = 4000
+}
+
+variable "aws_region" {
+  description = "AWS region used in the CloudWatch dashboard widget definitions"
+  type        = string
+  default     = "us-east-1"
+}

@@ -12,3 +12,8 @@ output "sns_topic_arn" {
   description = "ARN of the SNS ops-alerts topic"
   value       = aws_sns_topic.ops_alerts.arn
 }
+
+output "costs_dashboard_name" {
+  description = "Name of the FinSolveAI-Costs CloudWatch dashboard (RC-148)"
+  value       = aws_cloudwatch_dashboard.costs.dashboard_name
+}

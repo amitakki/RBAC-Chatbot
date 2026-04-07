@@ -22,6 +22,7 @@ from langsmith import traceable
 
 from app.config import settings
 from app.guardrails import GuardBlockedError, apply_output_guard, check_input
+from app.rag.cost_metrics import TokenUsage, emit_token_metrics, parse_usage_metadata
 from app.rag.embedder import get_embedder
 from app.rag.prompts.prompt_loader import load_system_prompt
 from app.rag.retriever import RbacRetriever, RetrievedChunk
@@ -40,7 +41,9 @@ class RagResult:
     top_score: float
     run_id: str
     prompt_version: str = field(default_factory=lambda: settings.prompt_version)
-    tokens_used: int | None = None   # total tokens from Groq usage_metadata (RC-123)
+    tokens_used: int | None = None        # total tokens from Groq usage_metadata (RC-123)
+    input_tokens: int | None = None       # prompt token count (RC-143)
+    output_tokens: int | None = None      # completion token count (RC-143)
 
 
 # ---------------------------------------------------------------------------
@@ -80,34 +83,39 @@ def _build_prompt(
 
 def _call_llm_with_retry(
     llm: ChatGroq, prompt: str
-) -> tuple[str | None, int | None]:
-    """Call the LLM; retry once on failure.
+) -> tuple[str | None, TokenUsage | None]:
+    """Call the LLM with configurable retries on failure.
 
     Returns:
-        (content, total_tokens) — content is None if both attempts fail;
-        total_tokens is None when usage metadata is absent.
+        (content, token_usage) — content is None if both attempts fail;
+        token_usage is None when usage metadata is absent.
     """
-    for attempt in range(2):
+    for attempt in range(settings.llm_retry_attempts):
         try:
             response = llm.invoke([HumanMessage(content=prompt)])
-            tokens: int | None = None
-            um = getattr(response, "usage_metadata", None)
-            if um:
-                tokens = um.get("total_tokens")
-            return response.content, tokens
+            usage = parse_usage_metadata(getattr(response, "usage_metadata", None))
+            return response.content, usage
         except Exception:
-            logger.exception("Groq call failed on attempt %s/2", attempt + 1)
-            if attempt == 0:
-                time.sleep(2)
+            logger.exception(
+                "Groq call failed on attempt %s/%s",
+                attempt + 1,
+                settings.llm_retry_attempts,
+            )
+            if attempt < settings.llm_retry_attempts - 1:
+                time.sleep(settings.llm_retry_backoff_seconds)
     return None, None
 
 
-def _anonymize_excerpt(text: str, max_chars: int = 200) -> str:
+def _anonymize_excerpt(
+    text: str,
+    max_chars: int | None = None,
+) -> str:
     """Presidio-anonymized excerpt of text, truncated to max_chars (RC-124).
 
     Reuses the Presidio singletons from output_guard to avoid loading spacy twice.
     Best-effort — returns a plain truncated excerpt on any error.
     """
+    max_chars = max_chars or settings.langsmith_chunk_excerpt_max_chars
     truncated = text[:max_chars]
     try:
         from app.guardrails.output_guard import _get_analyzer, _get_anonymizer  # noqa: PLC0415
@@ -172,7 +180,7 @@ def run_rag(
     # Build LLM client once (shared with optional rewriter)
     llm = ChatGroq(
         model=settings.groq_model,
-        temperature=0,
+        temperature=settings.groq_temperature,
         request_timeout=settings.groq_timeout_seconds,
         api_key=settings.groq_api_key,
     )
@@ -183,13 +191,39 @@ def run_rag(
         from app.rag.rewriter import rewrite_query  # local import — optional feature
         effective_query = rewrite_query(query, llm)
 
+    # Collect all query variants (always includes effective_query)
+    # Step-back and multi-query always branch from the *original* question so
+    # that HyDE expansion doesn't compound with decomposition unexpectedly.
+    query_variants: list[str] = [effective_query]
+
+    if settings.enable_step_back:
+        from app.rag.query_transforms import step_back_query  # noqa: PLC0415
+        query_variants.append(step_back_query(query, llm))
+
+    if settings.enable_multi_query:
+        from app.rag.query_transforms import generate_sub_queries  # noqa: PLC0415
+        query_variants.extend(
+            generate_sub_queries(query, llm, n=settings.multi_query_count)
+        )
+
     # RBAC-filtered retrieval (may raise RetrieverUnavailableError)
     retriever = RbacRetriever(
         client=_get_qdrant(),
         embedder=get_embedder(),
         collection=settings.qdrant_collection,
     )
-    chunks = retriever.retrieve(effective_query, user_role)
+
+    if len(query_variants) == 1:
+        chunks = retriever.retrieve(query_variants[0], user_role)
+    else:
+        from app.rag.query_transforms import deduplicate_chunks  # noqa: PLC0415
+        chunk_lists = [retriever.retrieve(q, user_role) for q in query_variants]
+        chunks = deduplicate_chunks(chunk_lists)[: settings.retrieval_top_k]
+
+    # Optional cross-encoder reranking — narrows chunks before prompt assembly
+    if settings.enable_reranking:
+        from app.rag.reranker import rerank  # noqa: PLC0415
+        chunks = rerank(effective_query, chunks, top_n=settings.reranker_top_n)
 
     # Zero-result short-circuit — not an error, just no matching docs
     if not chunks:
@@ -206,11 +240,11 @@ def run_rag(
 
     # Assemble prompt
     template = _cached_prompt()
-    history_window = (session_history or [])[-12:]  # last 6 pairs = 12 entries
+    history_window = (session_history or [])[-settings.session_history_max_messages :]
     prompt = _build_prompt(template, user_role, query, chunks, history_window or None)
 
     # LLM call with one retry
-    answer, tokens_used = _call_llm_with_retry(llm, prompt)
+    answer, token_usage = _call_llm_with_retry(llm, prompt)
     if answer is None:
         answer = (
             "The assistant is temporarily unavailable. Please try again shortly."
@@ -235,8 +269,21 @@ def run_rag(
         num_chunks=len(chunks),
         top_score=chunks[0].score,
         run_id=run_id,
-        tokens_used=tokens_used,
+        tokens_used=token_usage.total_tokens if token_usage else None,
+        input_tokens=token_usage.input_tokens if token_usage else None,
+        output_tokens=token_usage.output_tokens if token_usage else None,
     )
+
+    # RC-143/144/145: emit CloudWatch token usage and cost metrics
+    if settings.cloudwatch_metrics_enabled and token_usage is not None:
+        emit_token_metrics(
+            role=user_role,
+            usage=token_usage,
+            cost_per_1k_input=settings.groq_cost_per_1k_input_tokens,
+            cost_per_1k_output=settings.groq_cost_per_1k_output_tokens,
+            namespace=settings.cloudwatch_namespace,
+            aws_region=settings.aws_region,
+        )
 
     # RC-123/124: Annotate LangSmith trace with RAG metadata and chunk excerpts
     try:
@@ -250,6 +297,8 @@ def run_rag(
                 "top_score": result.top_score,
                 "latency_ms": int((time.monotonic() - start_ms) * 1000),
                 "tokens_used": result.tokens_used,
+                "input_tokens": result.input_tokens,
+                "output_tokens": result.output_tokens,
                 "guardrail_triggered": False,
                 "environment": settings.environment,
             })
