@@ -131,11 +131,11 @@ fmt:
 
 # Run Ragas evaluation suite against staging endpoint
 eval:
-    cd backend; uv run python -m evals.run_ragas
+    cd backend; uv run --extra evals python ../evals/run_ragas.py
 
 # Run RBAC boundary tests
 test-rbac:
-    cd backend; uv run pytest evals/rbac_boundary_tests.py -v
+    cd backend; uv run pytest ../evals/rbac_boundary_tests.py -v
 
 # ---------------------------------------------------------------------------
 # Utilities

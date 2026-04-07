@@ -1,7 +1,9 @@
 """Unit tests for Settings / config loading."""
+from typing import Annotated
+
 import pytest
-from pydantic import ValidationError
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import ValidationError, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class _MinimalSettings(BaseSettings):
@@ -16,6 +18,22 @@ class _MinimalSettings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
     environment: str = "local"
     prompt_version: str = "v1"
+
+
+class _CorsSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+
+    cors_allow_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
+
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def parse_cors_allow_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            cleaned = value.split("#", 1)[0].strip()
+            if not cleaned:
+                return []
+            return [origin.strip() for origin in cleaned.split(",") if origin.strip()]
+        return value
 
 
 def test_valid_settings(monkeypatch):
@@ -66,3 +84,12 @@ def test_env_override(monkeypatch):
     s = _MinimalSettings()
     assert s.qdrant_collection == "my_custom_collection"
     assert s.environment == "staging"
+
+
+def test_cors_allow_origins_parses_csv_env(monkeypatch):
+    monkeypatch.setenv(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:3000, https://example.com # frontend origins",
+    )
+    s = _CorsSettings()
+    assert s.cors_allow_origins == ["http://localhost:3000", "https://example.com"]

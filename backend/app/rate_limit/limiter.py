@@ -27,9 +27,9 @@ from app.config import settings
 # ---------------------------------------------------------------------------
 
 _ROLE_HOURLY_LIMITS: dict[str, int] = {
-    "finance": 50,
-    "engineering": 50,
-    "executive": 100,
+    "finance": settings.rate_limit_finance_per_hour,
+    "engineering": settings.rate_limit_engineering_per_hour,
+    "executive": settings.rate_limit_executive_per_hour,
 }
 
 

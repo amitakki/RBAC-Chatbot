@@ -47,7 +47,10 @@ async def ready(qdrant: QdrantDep) -> JSONResponse:
 
     # Redis
     try:
-        r = redis_lib.from_url(settings.redis_url, socket_connect_timeout=2)
+        r = redis_lib.from_url(
+            settings.redis_url,
+            socket_connect_timeout=settings.health_redis_timeout_seconds,
+        )
         r.ping()
         checks["redis"] = "ok"
     except Exception:

@@ -166,7 +166,12 @@ def run(answers_file_arg: Path | None, output_dir: Path) -> bool:
 
     # --- run evaluation ---
     print("Running Ragas evaluate()... (this may take a few minutes)")
-    eval_result = evaluate(dataset=dataset, metrics=metrics)
+    eval_result = evaluate(
+        dataset=dataset,
+        metrics=metrics,
+        llm=llm,
+        embeddings=embeddings,
+    )
 
     # --- extract per-metric scores ---
     scores_df = eval_result.to_pandas()
