@@ -35,6 +35,13 @@ module "monitoring" {
   environment        = var.environment
   log_retention_days = var.log_retention_days
   alert_email        = var.alert_email
+  aws_region         = var.aws_region
+
+  # Cost / token usage alarms and dashboard (RC-146, RC-147, RC-148, RC-149)
+  token_usage_namespace       = var.token_usage_namespace
+  daily_cost_threshold_usd    = var.daily_cost_threshold_usd
+  hourly_query_threshold      = var.hourly_query_threshold
+  token_per_request_threshold = var.token_per_request_threshold
 
   # Wired after ECS module resolves — Terraform resolves the DAG automatically
   ecs_cluster_name = module.ecs.cluster_name

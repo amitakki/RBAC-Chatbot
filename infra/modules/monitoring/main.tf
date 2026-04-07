@@ -110,3 +110,194 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
     Name = "${local.name_prefix}-alb-5xx-errors"
   }
 }
+
+# ── Cost & Token Usage Alarms (RC-146, RC-147) ─────────────────────────────────
+
+# RC-146: Alert when estimated daily spend exceeds $5 USD
+resource "aws_cloudwatch_metric_alarm" "high_daily_cost" {
+  alarm_name          = "${local.name_prefix}-HighDailyCost"
+  alarm_description   = "Estimated LLM cost exceeded $${var.daily_cost_threshold_usd}/day — review usage immediately"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "EstimatedCostUSD"
+  namespace           = var.token_usage_namespace
+  period              = 86400 # 24 hours
+  statistic           = "Sum"
+  threshold           = var.daily_cost_threshold_usd
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.ops_alerts.arn]
+  ok_actions    = [aws_sns_topic.ops_alerts.arn]
+
+  tags = {
+    Name = "${local.name_prefix}-HighDailyCost"
+  }
+}
+
+# RC-147: Alert when query volume exceeds 200 requests per hour
+resource "aws_cloudwatch_metric_alarm" "high_hourly_queries" {
+  alarm_name          = "${local.name_prefix}-HighHourlyQueries"
+  alarm_description   = "Query volume exceeded ${var.hourly_query_threshold}/hour — possible abuse or traffic spike"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "RequestCount"
+  namespace           = var.token_usage_namespace
+  period              = 3600 # 1 hour
+  statistic           = "Sum"
+  threshold           = var.hourly_query_threshold
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.ops_alerts.arn]
+  ok_actions    = [aws_sns_topic.ops_alerts.arn]
+
+  tags = {
+    Name = "${local.name_prefix}-HighHourlyQueries"
+  }
+}
+
+# RC-147: Alert when a single request consumes an abnormal number of tokens
+resource "aws_cloudwatch_metric_alarm" "abnormal_token_usage" {
+  alarm_name          = "${local.name_prefix}-AbnormalTokenUsage"
+  alarm_description   = "A single request used more than ${var.token_per_request_threshold} tokens — possible prompt injection or runaway context"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "TokensUsed"
+  namespace           = var.token_usage_namespace
+  period              = 60
+  statistic           = "Maximum"
+  threshold           = var.token_per_request_threshold
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.ops_alerts.arn]
+
+  tags = {
+    Name = "${local.name_prefix}-AbnormalTokenUsage"
+  }
+}
+
+# ── CloudWatch Dashboard: FinSolveAI-Costs (RC-148, RC-149) ───────────────────
+
+resource "aws_cloudwatch_dashboard" "costs" {
+  dashboard_name = "${local.name_prefix}-FinSolveAI-Costs"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      # Row 1 — Token usage over time by role
+      {
+        type   = "metric"
+        x      = 0
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title  = "TokensUsed by Role (hourly)"
+          view   = "timeSeries"
+          stacked = false
+          metrics = [
+            for role in ["finance", "hr", "marketing", "engineering", "executive"] :
+            ["${var.token_usage_namespace}", "TokensUsed", "Role", role, { "label" : role, "stat" : "Sum", "period" : 3600 }]
+          ]
+          period = 3600
+          region = var.aws_region
+          yAxis  = { left = { label = "Tokens", showUnits = false } }
+        }
+      },
+      # Row 1 — Estimated daily cost trend
+      {
+        type   = "metric"
+        x      = 12
+        y      = 0
+        width  = 12
+        height = 6
+        properties = {
+          title  = "EstimatedCostUSD (daily trend)"
+          view   = "timeSeries"
+          stacked = false
+          metrics = [
+            ["${var.token_usage_namespace}", "EstimatedCostUSD", { "label" : "All Roles", "stat" : "Sum", "period" : 86400, "color" : "#ff7f0e" }]
+          ]
+          period = 86400
+          region = var.aws_region
+          yAxis  = { left = { label = "USD", showUnits = false } }
+          annotations = {
+            horizontal = [
+              { value = var.daily_cost_threshold_usd, label = "Alert threshold", color = "#d62728" }
+            ]
+          }
+        }
+      },
+      # Row 2 — Request rate per hour by role
+      {
+        type   = "metric"
+        x      = 0
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title  = "RequestCount by Role (hourly)"
+          view   = "bar"
+          stacked = true
+          metrics = [
+            for role in ["finance", "hr", "marketing", "engineering", "executive"] :
+            ["${var.token_usage_namespace}", "RequestCount", "Role", role, { "label" : role, "stat" : "Sum", "period" : 3600 }]
+          ]
+          period = 3600
+          region = var.aws_region
+          yAxis  = { left = { label = "Requests", showUnits = false } }
+        }
+      },
+      # Row 2 — Cost breakdown by role (single period sum)
+      {
+        type   = "metric"
+        x      = 12
+        y      = 6
+        width  = 12
+        height = 6
+        properties = {
+          title  = "EstimatedCostUSD by Role (daily)"
+          view   = "bar"
+          stacked = false
+          metrics = [
+            for role in ["finance", "hr", "marketing", "engineering", "executive"] :
+            ["${var.token_usage_namespace}", "EstimatedCostUSD", "Role", role, { "label" : role, "stat" : "Sum", "period" : 86400 }]
+          ]
+          period = 86400
+          region = var.aws_region
+          yAxis  = { left = { label = "USD", showUnits = false } }
+        }
+      },
+      # Row 3 — Month-to-date total cost (single-value widget)
+      {
+        type   = "metric"
+        x      = 0
+        y      = 12
+        width  = 6
+        height = 3
+        properties = {
+          title  = "Month-to-Date Cost (USD)"
+          view   = "singleValue"
+          metrics = [
+            ["${var.token_usage_namespace}", "EstimatedCostUSD", { "label" : "MTD", "stat" : "Sum", "period" : 2592000, "color" : "#2ca02c" }]
+          ]
+          region = var.aws_region
+        }
+      },
+      # Row 3 — Peak tokens per request
+      {
+        type   = "metric"
+        x      = 6
+        y      = 12
+        width  = 6
+        height = 3
+        properties = {
+          title  = "Peak TokensUsed per Request"
+          view   = "singleValue"
+          metrics = [
+            ["${var.token_usage_namespace}", "TokensUsed", { "label" : "Max", "stat" : "Maximum", "period" : 3600, "color" : "#9467bd" }]
+          ]
+          region = var.aws_region
+        }
+      },
+    ]
+  })
+}

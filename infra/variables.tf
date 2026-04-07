@@ -140,6 +140,30 @@ variable "alert_email" {
   default     = ""
 }
 
+variable "token_usage_namespace" {
+  description = "CloudWatch custom metric namespace for token/cost metrics"
+  type        = string
+  default     = "FinSolveAI/TokenUsage"
+}
+
+variable "daily_cost_threshold_usd" {
+  description = "USD daily spend threshold for the HighDailyCost alarm"
+  type        = number
+  default     = 5
+}
+
+variable "hourly_query_threshold" {
+  description = "Requests per hour threshold for the HighHourlyQueries alarm"
+  type        = number
+  default     = 200
+}
+
+variable "token_per_request_threshold" {
+  description = "Max tokens per request before the AbnormalTokenUsage alarm fires"
+  type        = number
+  default     = 4000
+}
+
 # ── Amplify / Frontend ─────────────────────────────────────────────────────────
 
 variable "amplify_github_repo" {
