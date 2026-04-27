@@ -114,9 +114,21 @@ class RbacRetriever:
                 from app.rag.bm25_embedder import embed_sparse_one  # noqa: PLC0415
                 indices, values = embed_sparse_one(query)
                 sparse_vec = SparseVector(indices=indices, values=values)
-                prefetch_limit = (
-                    settings.retrieval_top_k * settings.hybrid_prefetch_limit_multiplier
-                )
+                # Qdrant FusionQuery (RRF) rejects score_threshold as a kwarg,
+                # so we over-fetch and apply the threshold in Python after
+                # fusion when dynamic mode is enabled.
+                if settings.retrieval_dynamic_threshold_enabled:
+                    fetch_limit = settings.retrieval_max_chunks
+                    prefetch_limit = (
+                        fetch_limit
+                        * settings.hybrid_prefetch_limit_multiplier
+                    )
+                else:
+                    fetch_limit = settings.retrieval_top_k
+                    prefetch_limit = (
+                        settings.retrieval_top_k
+                        * settings.hybrid_prefetch_limit_multiplier
+                    )
                 response = self._client.query_points(
                     collection_name=self._collection,
                     prefetch=[
@@ -134,7 +146,7 @@ class RbacRetriever:
                         ),
                     ],
                     query=FusionQuery(fusion=Fusion.RRF),
-                    limit=settings.retrieval_top_k,
+                    limit=fetch_limit,
                     with_payload=True,
                     # score_threshold omitted — incompatible with FusionQuery
                 )
@@ -171,8 +183,10 @@ class RbacRetriever:
         ]
 
         if settings.retrieval_dynamic_threshold_enabled:
-            # Qdrant already filtered by score_threshold; the Python call
-            # enforces min_chunks (floor guard) and max_chunks (ceiling cap).
+            # Both paths: enforce min_chunks (floor guard) and
+            # max_chunks (ceiling cap). For dense, Qdrant already filtered;
+            # for hybrid, Python filtering is the only option (RRF scores
+            # are rank-fusion scores, not cosine similarities).
             chunks = _apply_threshold_filter(
                 chunks,
                 settings.retrieval_score_threshold,
