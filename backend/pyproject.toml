@@ -22,12 +22,14 @@ dependencies = [
     # LangChain & LLM
     "langchain>=0.3",
     "langchain-groq>=0.1",
+    "langchain-ollama>=0.2",
     "langchain-community>=0.3",
     "langchain-huggingface>=0.0.3",
     # Vector DB
     "qdrant-client>=1.9",
     # Embeddings
     "sentence-transformers>=2.7",
+    "fastembed>=0.4",  # BM25 sparse embeddings for hybrid search (optional)
     # Session / Rate limiting
     "redis>=5.0",
     # PII Guardrails

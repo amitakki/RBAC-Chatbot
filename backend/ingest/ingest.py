@@ -123,9 +123,25 @@ def run(reset: bool = False, dry_run: bool = False) -> None:
             embed_elapsed,
         )
 
+        sparse_vecs: list[tuple[list[int], list[float]]] | None = None
+        if settings.enable_hybrid_search:
+            from app.rag.bm25_embedder import embed_sparse_batch  # noqa: PLC0415
+            sparse_t0 = time.perf_counter()
+            log.info(
+                "Computing BM25 sparse vectors for %d chunks of '%s'", len(texts), filename
+            )
+            sparse_vecs = embed_sparse_batch(texts)
+            log.info(
+                "BM25 sparse embedding done for '%s' in %.2fs",
+                filename,
+                time.perf_counter() - sparse_t0,
+            )
+
         upsert_t0 = time.perf_counter()
         log.info("Upserting %d vectors for '%s' into '%s'", len(vectors), filename, collection)
-        upserted = batch_upsert(client, collection, chunks, vectors)  # type: ignore[arg-type]
+        upserted = batch_upsert(
+            client, collection, chunks, vectors, sparse_vectors=sparse_vecs  # type: ignore[arg-type]
+        )
         upsert_elapsed = time.perf_counter() - upsert_t0
         log.info(
             "%s -> %d chunks embedded and upserted (embed=%.2fs upsert=%.2fs)",

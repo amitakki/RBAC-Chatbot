@@ -407,11 +407,42 @@ User Query
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
 | `top_k` | 5 | Balance between context richness and token budget |
-| `similarity_threshold` | 0.60 | Reject low-confidence chunks |
+| `similarity_threshold` | 0.60 | Reject low-confidence chunks (dense-only mode) |
 | `chunk_size` | 512 tokens | Fits within context without losing coherence |
 | `chunk_overlap` | 64 tokens | Preserve sentence boundary context |
 | `embedding_model` | `all-MiniLM-L6-v2` | Fast, free, good quality for English enterprise docs |
 | `reranker` | `cross-encoder/ms-marco-MiniLM-L-6-v2` (optional) | Improve chunk relevance ordering |
+| `hybrid_search` | Optional BM25 + Dense RRF (off by default) | See Section 5.2a |
+
+#### 5.2a Hybrid Search (Optional Feature)
+
+Dense vector search alone can miss relevant chunks when query terminology diverges from document text. BM25 sparse keyword search complements dense search by excelling at exact keyword matching.
+
+**Feature Flag:** `ENABLE_HYBRID_SEARCH=false` (default) — no impact on existing dense-only retrieval.
+
+**When to Enable:**
+- If dense-only retrieval produces consistently incomplete results for keyword-heavy queries
+- If the evaluation suite (Ragas) shows low `context_recall` due to terminological mismatches
+- Enabling requires full re-ingestion: `uv run python -m ingest.ingest --reset`
+
+**Architecture:**
+- Uses Qdrant's native **Reciprocal Rank Fusion (RRF)** to fuse dense and sparse results
+- BM25 sparse vectors computed via `fastembed` library (`Qdrant/bm25` ONNX model)
+- RBAC filter applied inside each Prefetch arm (role isolation preserved)
+- No `score_threshold` in hybrid mode (incompatible with Fusion; RRF produces rank-based scores)
+- Prefetch multiplier: `hybrid_prefetch_limit_multiplier=2` (each arm pre-fetches `top_k × 2`)
+
+**Configuration:**
+```ini
+ENABLE_HYBRID_SEARCH=false
+BM25_MODEL=Qdrant/bm25
+HYBRID_PREFETCH_LIMIT_MULTIPLIER=2
+```
+
+**Collateral Changes:**
+- Qdrant collection schema bumped from v1 → v2 when hybrid enabled (stored in metadata sentinel)
+- Old collections must be reset to support sparse vector field
+- Integration tests remain green (RBAC, answer quality, source validation all preserved)
 
 ### 5.3 System Prompt Template
 
@@ -1184,10 +1215,11 @@ Jobs:
 | Layer | Technology | Version | Notes |
 |-------|-----------|---------|-------|
 | LLM | LLaMA 3.1 70B via Groq | Latest | Free tier for dev/test |
-| Embeddings | `all-MiniLM-L6-v2` | `sentence-transformers` | Self-hosted, no API cost |
+| Embeddings (Dense) | `all-MiniLM-L6-v2` | `sentence-transformers` | Self-hosted, no API cost |
+| Embeddings (Sparse BM25, optional) | `Qdrant/bm25` | `fastembed>=0.4` | ONNX-based, CPU-only, optional hybrid search |
 | RAG Framework | LangChain | 0.3.x | Core chain + retrievers |
 | Document Parsing | Docling + LangChain loaders | Latest | Markdown, CSV, PDF support |
-| Vector Database | Qdrant Cloud (managed) | Free tier | HTTPS + API key auth; local Docker for dev |
+| Vector Database | Qdrant Cloud (managed) | Free tier + Hybrid RRF | HTTPS + API key auth; local Docker for dev; supports named sparse vectors |
 | Backend | FastAPI | 0.111.x | Async, Pydantic v2 |
 | Frontend | React 18 + TypeScript | 18.x | Tailwind, React Query |
 | PII Detection | Microsoft Presidio | 2.x | Analyzer + Anonymizer |

@@ -1,6 +1,6 @@
 # FinSolve Internal AI Assistant
 
-Enterprise RAG chatbot for FinSolve Technologies with Role-Based Access Control (RBAC), guardrails, and full observability. Built on FastAPI + LangChain + Qdrant + Groq (LLaMA 3.1 70B).
+Enterprise RAG chatbot for FinSolve Technologies with Role-Based Access Control (RBAC), guardrails, and full observability. Built on FastAPI + LangChain + Qdrant with configurable Groq or Ollama LLM backends.
 
 ---
 
@@ -25,9 +25,15 @@ cd RBAC-Chatbot
 # 2. Set up environment
 cp .env.example .env
 # Edit .env — minimum required:
+#   LLM_PROVIDER=groq
 #   GROQ_API_KEY=<your key from console.groq.com>
 #   JWT_SECRET=<generate: python -c "import secrets; print(secrets.token_hex(32))">
 #   HF_TOKEN=<optional; useful for Hugging Face model downloads/rate limits>
+#
+# Or for local Ollama:
+#   LLM_PROVIDER=ollama
+#   OLLAMA_MODEL=llama3.2
+#   OLLAMA_BASE_URL=http://localhost:11434
 
 # 3. Start infrastructure in Docker
 just up
@@ -100,11 +106,31 @@ npm run dev
 `HF_TOKEN` is optional for the default public embedding model, but recommended if
 you hit Hugging Face download limits or switch to a gated/private model.
 
+For Groq, set `LLM_PROVIDER=groq` and provide `GROQ_API_KEY`.
+For Ollama, set `LLM_PROVIDER=ollama`, provide `OLLAMA_MODEL`, and ensure the
+Ollama server is reachable at `OLLAMA_BASE_URL`.
+
 If you want the full Docker stack instead, use:
 
 ```bash
 just up-full
 ```
+
+### Optional: Hybrid BM25 + Dense Search
+
+By default, retrieval uses only dense vector search. For improved recall with terminology-heavy queries, you can enable hybrid search combining BM25 sparse keywords with dense vectors via Qdrant's Reciprocal Rank Fusion (RRF).
+
+```bash
+# 1. Enable hybrid search in .env
+echo "ENABLE_HYBRID_SEARCH=true" >> .env
+
+# 2. Reinstall and re-ingest
+cd backend
+uv sync
+uv run python -m ingest.ingest --reset
+```
+
+This is optional and off by default — existing dense-only behavior is preserved until explicitly enabled.
 
 ---
 
@@ -150,10 +176,11 @@ RBAC-Chatbot/
 
 | Layer | Technology |
 |-------|-----------|
-| LLM | LLaMA 3.1 70B via Groq |
-| Embeddings | `all-MiniLM-L6-v2` (sentence-transformers) |
+| LLM | Groq or Ollama via LangChain |
+| Embeddings (Dense) | `all-MiniLM-L6-v2` (sentence-transformers) |
+| Embeddings (Sparse BM25, optional) | `fastembed` + Qdrant native RRF (hybrid search) |
 | RAG Framework | LangChain 0.3 |
-| Vector DB | Qdrant Cloud (prod) / Docker (local) |
+| Vector DB | Qdrant Cloud (prod) / Docker (local) with optional hybrid RRF |
 | Backend | FastAPI + Python 3.11 |
 | Frontend | React 18 + TypeScript + Tailwind |
 | Session / Rate Limit | Redis (ElastiCache in AWS) |

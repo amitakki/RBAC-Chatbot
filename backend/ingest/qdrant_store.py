@@ -15,6 +15,8 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
     PointStruct,
+    SparseVector,
+    SparseVectorParams,
     VectorParams,
 )
 
@@ -22,7 +24,7 @@ from app.config import settings
 
 # Version bump this when the embedding model or schema changes
 EMBEDDING_MODEL_VERSION = "1.0.0"
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"  # v2: added sparse vector support for hybrid search
 
 # Number of points per upsert batch
 _UPSERT_BATCH = 100
@@ -48,9 +50,17 @@ def init_collection(
         existing.discard(collection_name)
 
     if collection_name not in existing:
+        sparse_cfg = (
+            {"bm25": SparseVectorParams()}
+            if settings.enable_hybrid_search
+            else None
+        )
         client.create_collection(
             collection_name=collection_name,
-            vectors_config=VectorParams(size=settings.embedding_dims, distance=Distance.COSINE),
+            vectors_config=VectorParams(
+                size=settings.embedding_dims, distance=Distance.COSINE
+            ),
+            **({"sparse_vectors_config": sparse_cfg} if sparse_cfg else {}),
         )
 
     # Upsert the metadata sentinel point (zero vector, id=0)
@@ -77,20 +87,34 @@ def batch_upsert(
     collection_name: str,
     chunks: list[dict],
     vectors: list[list[float]],
+    sparse_vectors: list[tuple[list[int], list[float]]] | None = None,
 ) -> int:
-    """
-    Upsert chunks + their vectors into Qdrant.
+    """Upsert chunks + their vectors into Qdrant.
 
-    Returns the number of points upserted.
+    Args:
+        client: Qdrant client
+        collection_name: Collection name
+        chunks: List of chunk dicts with metadata and text
+        vectors: List of dense vectors (one per chunk)
+        sparse_vectors: Optional list of (indices, values) tuples for BM25
+                       (one per chunk, or None to skip sparse vectors)
+
+    Returns:
+        The number of points upserted.
     """
     points: list[PointStruct] = []
-    for chunk, vector in zip(chunks, vectors):
+    for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
         payload = dict(chunk["metadata"])
         payload["text"] = chunk["text"]
+        if sparse_vectors is not None:
+            indices, values = sparse_vectors[i]
+            vec = {"": vector, "bm25": SparseVector(indices=indices, values=values)}
+        else:
+            vec = vector  # existing path — plain list for unnamed dense vector
         points.append(
             PointStruct(
                 id=str(uuid.uuid5(_POINT_ID_NAMESPACE, payload["doc_id"])),
-                vector=vector,
+                vector=vec,
                 payload=payload,
             )
         )

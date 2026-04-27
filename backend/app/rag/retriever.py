@@ -11,7 +11,15 @@ from dataclasses import dataclass
 
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import (
+    FieldCondition,
+    Filter,
+    Fusion,
+    FusionQuery,
+    MatchValue,
+    Prefetch,
+    SparseVector,
+)
 
 from app.config import settings
 from ingest.embedder import Embedder
@@ -71,13 +79,42 @@ class RbacRetriever:
         )
 
         try:
-            response = self._client.query_points(
-                collection_name=self._collection,
-                query=vector,
-                query_filter=role_filter,
-                limit=settings.retrieval_top_k,
-                score_threshold=settings.retrieval_score_threshold,
-            )
+            if settings.enable_hybrid_search:
+                from app.rag.bm25_embedder import embed_sparse_one  # noqa: PLC0415
+                indices, values = embed_sparse_one(query)
+                sparse_vec = SparseVector(indices=indices, values=values)
+                prefetch_limit = (
+                    settings.retrieval_top_k * settings.hybrid_prefetch_limit_multiplier
+                )
+                response = self._client.query_points(
+                    collection_name=self._collection,
+                    prefetch=[
+                        Prefetch(
+                            query=vector,
+                            using=None,  # unnamed dense vector
+                            filter=role_filter,
+                            limit=prefetch_limit,
+                        ),
+                        Prefetch(
+                            query=sparse_vec,
+                            using="bm25",
+                            filter=role_filter,
+                            limit=prefetch_limit,
+                        ),
+                    ],
+                    query=FusionQuery(fusion=Fusion.RRF),
+                    limit=settings.retrieval_top_k,
+                    with_payload=True,
+                    # score_threshold omitted — incompatible with FusionQuery
+                )
+            else:
+                response = self._client.query_points(
+                    collection_name=self._collection,
+                    query=vector,
+                    query_filter=role_filter,
+                    limit=settings.retrieval_top_k,
+                    score_threshold=settings.retrieval_score_threshold,
+                )
             results = response.points
         except (UnexpectedResponse, Exception) as exc:
             raise RetrieverUnavailableError(

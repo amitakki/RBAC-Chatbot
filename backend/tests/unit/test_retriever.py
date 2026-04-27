@@ -191,3 +191,141 @@ class TestRetrieverErrorHandling:
 
         with pytest.raises(RetrieverUnavailableError, match="timeout after 3s"):
             retriever.retrieve("test", user_role="finance")
+
+
+class TestHybridRetrieval:
+    """Test hybrid BM25 + dense retrieval when enable_hybrid_search=True."""
+
+    def test_hybrid_uses_prefetch_list(self, mock_embedder, monkeypatch):
+        """When hybrid enabled, query_points called with prefetch list."""
+        from qdrant_client.models import Prefetch
+
+        monkeypatch.setattr("app.rag.retriever.settings.enable_hybrid_search", True)
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.hybrid_prefetch_limit_multiplier", 2
+        )
+        # Patch the lazy import target directly
+        monkeypatch.setattr(
+            "app.rag.bm25_embedder.embed_sparse_one",
+            lambda text: ([1, 2, 3], [0.5, 0.3, 0.2]),
+        )
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response(_make_qdrant_result())
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        retriever.retrieve("Q4 revenue?", user_role="finance")
+
+        kwargs = mock_client.query_points.call_args.kwargs
+        assert "prefetch" in kwargs
+        assert len(kwargs["prefetch"]) == 2
+        assert all(isinstance(p, Prefetch) for p in kwargs["prefetch"])
+
+    def test_hybrid_rbac_filter_in_both_prefetch_arms(self, mock_embedder, monkeypatch):
+        """Both Prefetch arms must include the RBAC role filter."""
+        monkeypatch.setattr("app.rag.retriever.settings.enable_hybrid_search", True)
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.hybrid_prefetch_limit_multiplier", 2
+        )
+        monkeypatch.setattr(
+            "app.rag.bm25_embedder.embed_sparse_one",
+            lambda text: ([10], [1.0]),
+        )
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response()
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        retriever.retrieve("budget?", user_role="finance")
+
+        prefetch = mock_client.query_points.call_args.kwargs["prefetch"]
+        for arm in prefetch:
+            assert arm.filter is not None
+            assert arm.filter.must[0].match.value == "finance"
+
+    def test_hybrid_no_score_threshold(self, mock_embedder, monkeypatch):
+        """Hybrid path must not pass score_threshold (incompatible with RRF)."""
+        monkeypatch.setattr("app.rag.retriever.settings.enable_hybrid_search", True)
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.hybrid_prefetch_limit_multiplier", 2
+        )
+        monkeypatch.setattr(
+            "app.rag.bm25_embedder.embed_sparse_one",
+            lambda text: ([0], [1.0]),
+        )
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response()
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        retriever.retrieve("test?", user_role="hr")
+
+        kwargs = mock_client.query_points.call_args.kwargs
+        assert "score_threshold" not in kwargs or kwargs.get("score_threshold") is None
+
+    def test_hybrid_fusion_rrf_query(self, mock_embedder, monkeypatch):
+        """Top-level query must be FusionQuery(Fusion.RRF)."""
+        from qdrant_client.models import Fusion, FusionQuery
+
+        monkeypatch.setattr("app.rag.retriever.settings.enable_hybrid_search", True)
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.hybrid_prefetch_limit_multiplier", 2
+        )
+        monkeypatch.setattr(
+            "app.rag.bm25_embedder.embed_sparse_one",
+            lambda text: ([5], [0.8]),
+        )
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response()
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        retriever.retrieve("test?", user_role="executive")
+
+        kwargs = mock_client.query_points.call_args.kwargs
+        assert isinstance(kwargs["query"], FusionQuery)
+        assert kwargs["query"].fusion == Fusion.RRF
+
+    def test_hybrid_with_payload_true(self, mock_embedder, monkeypatch):
+        """Hybrid path must request payload explicitly."""
+        monkeypatch.setattr("app.rag.retriever.settings.enable_hybrid_search", True)
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.hybrid_prefetch_limit_multiplier", 2
+        )
+        monkeypatch.setattr(
+            "app.rag.bm25_embedder.embed_sparse_one",
+            lambda text: ([1], [1.0]),
+        )
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response()
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        retriever.retrieve("test?", user_role="marketing")
+
+        kwargs = mock_client.query_points.call_args.kwargs
+        assert kwargs.get("with_payload") is True
+
+
+class TestHybridFlagOff:
+    """Test that dense-only path is used when enable_hybrid_search=False."""
+
+    def test_dense_path_has_no_prefetch(self, mock_embedder, monkeypatch):
+        """Dense-only path must not use prefetch."""
+        monkeypatch.setattr("app.rag.retriever.settings.enable_hybrid_search", False)
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response(_make_qdrant_result())
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        retriever.retrieve("test?", user_role="finance")
+
+        kwargs = mock_client.query_points.call_args.kwargs
+        assert "prefetch" not in kwargs
+
+    def test_dense_path_has_score_threshold(self, mock_embedder, monkeypatch):
+        """Dense-only path must include score_threshold."""
+        monkeypatch.setattr("app.rag.retriever.settings.enable_hybrid_search", False)
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response()
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        retriever.retrieve("test?", user_role="hr")
+
+        kwargs = mock_client.query_points.call_args.kwargs
+        assert "score_threshold" in kwargs
+        assert kwargs["score_threshold"] == 0.55  # default threshold
