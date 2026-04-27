@@ -42,6 +42,7 @@ def rerank(
     query: str,
     chunks: list[RetrievedChunk],
     top_n: int,
+    min_score: float | None = None,
 ) -> list[RetrievedChunk]:
     """Rerank *chunks* against *query* using a cross-encoder, return top *top_n*.
 
@@ -49,6 +50,7 @@ def rerank(
         query:  The user's effective query (after any HyDE rewriting).
         chunks: Retrieved chunks from Qdrant (already RBAC-filtered).
         top_n:  Maximum number of chunks to return after reranking.
+        min_score: Optional cross-encoder logit floor; None = count-only cutoff.
 
     Returns:
         A new list of at most *top_n* RetrievedChunk objects, ordered by
@@ -62,7 +64,8 @@ def rerank(
           returned truncated to *top_n*, so the pipeline never fails.
         - The cross-encoder scores are raw logits, not probabilities; they are
           valid for ranking but should not be compared directly to Qdrant cosine
-          scores.
+          scores. A typical reranker_min_score of 0.0 separates clear positives
+          from negatives.
     """
     if not chunks:
         return chunks
@@ -79,7 +82,9 @@ def rerank(
         )
 
         result = []
-        for score, chunk in scored[:top_n]:
+        for score, chunk in scored:
+            if min_score is not None and score < min_score:
+                break
             result.append(
                 RetrievedChunk(
                     text=chunk.text,
@@ -88,6 +93,8 @@ def rerank(
                     doc_id=chunk.doc_id,
                 )
             )
+            if len(result) >= top_n:
+                break
 
         logger.debug(
             "Reranker: %d chunks → top %d; top score %.4f",
