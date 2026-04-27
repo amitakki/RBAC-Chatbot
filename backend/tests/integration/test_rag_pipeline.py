@@ -7,7 +7,7 @@ when queried as the finance role (FIN-001 golden dataset scenario).
 
 Requires:
   - Qdrant running (docker compose up qdrant)
-  - GROQ_API_KEY set in the environment
+  - LLM provider env set for the selected backend
   - QDRANT_URL env var or default http://localhost:6333
 
 Skips automatically if either dependency is missing.
@@ -39,6 +39,13 @@ _DATA_FILE = (
 _EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
+def _llm_available() -> bool:
+    provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    if provider == "ollama":
+        return bool(os.getenv("OLLAMA_MODEL"))
+    return bool(os.getenv("GROQ_API_KEY"))
+
+
 def _qdrant_available() -> bool:
     try:
         QdrantClient(url=_QDRANT_URL, timeout=3).get_collections()
@@ -48,10 +55,10 @@ def _qdrant_available() -> bool:
 
 
 pytestmark = pytest.mark.skipif(
-    not _qdrant_available() or not os.getenv("GROQ_API_KEY"),
+    not _qdrant_available() or not _llm_available(),
     reason=(
         "Skipping RAG integration tests: "
-        "Qdrant must be reachable and GROQ_API_KEY must be set. "
+        "Qdrant must be reachable and the selected LLM provider must be configured. "
         "Start Qdrant with: docker compose up qdrant"
     ),
 )
@@ -146,3 +153,32 @@ class TestRagPipelineFin001:
         result_b = run_rag("What is Q4 revenue?", user_role="finance")
 
         assert result_a.run_id != result_b.run_id
+
+    def test_dynamic_threshold_returns_fewer_chunks(
+        self, ingested_collection: str, monkeypatch
+    ):
+        """RC-163: dynamic threshold reduces num_chunks vs fixed mode."""
+        from app.config import settings
+        from app.rag.pipeline import run_rag
+
+        monkeypatch.setattr(settings, "qdrant_collection", ingested_collection)
+        monkeypatch.setattr(
+            settings, "retrieval_dynamic_threshold_enabled", False
+        )
+
+        result_fixed = run_rag(
+            query="What was FinSolve's total revenue?", user_role="finance"
+        )
+
+        # Now enable dynamic threshold with a high floor
+        monkeypatch.setattr(
+            settings, "retrieval_dynamic_threshold_enabled", True
+        )
+        monkeypatch.setattr(settings, "retrieval_score_threshold", 0.99)
+
+        result_dynamic = run_rag(
+            query="What was FinSolve's total revenue?", user_role="finance"
+        )
+
+        # Dynamic with high threshold should return <= fixed mode chunks
+        assert result_dynamic.num_chunks <= result_fixed.num_chunks
