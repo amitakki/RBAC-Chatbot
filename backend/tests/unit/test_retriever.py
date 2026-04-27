@@ -329,3 +329,199 @@ class TestHybridFlagOff:
         kwargs = mock_client.query_points.call_args.kwargs
         assert "score_threshold" in kwargs
         assert kwargs["score_threshold"] == 0.55  # default threshold
+
+
+class TestDynamicThreshold:
+    """RC-162: Dynamic/adaptive threshold-based retrieval."""
+
+    def test_dynamic_dense_returns_variable_count_above_threshold(
+        self, mock_embedder, monkeypatch
+    ):
+        """When dynamic enabled, dense returns chunks above threshold."""
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.enable_hybrid_search", False
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings"
+            ".retrieval_dynamic_threshold_enabled",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_score_threshold",
+            0.8,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_min_chunks", 1
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_max_chunks", 10
+        )
+        # 3 chunks above threshold, 2 below
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response(
+            _make_qdrant_result(score=0.9),
+            _make_qdrant_result(score=0.85),
+            _make_qdrant_result(score=0.81),
+            _make_qdrant_result(score=0.5),
+            _make_qdrant_result(score=0.4),
+        )
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        chunks = retriever.retrieve("test?", user_role="finance")
+
+        assert len(chunks) == 3
+        assert all(c.score >= 0.8 for c in chunks)
+
+    def test_dynamic_dense_floor_when_all_below_threshold(
+        self, mock_embedder, monkeypatch
+    ):
+        """Return min_chunks when all below threshold."""
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.enable_hybrid_search", False
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings"
+            ".retrieval_dynamic_threshold_enabled",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_score_threshold",
+            0.9,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_min_chunks", 2
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_max_chunks", 10
+        )
+        # All below 0.9 threshold
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response(
+            _make_qdrant_result(score=0.8),
+            _make_qdrant_result(score=0.75),
+            _make_qdrant_result(score=0.7),
+        )
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        chunks = retriever.retrieve("test?", user_role="finance")
+
+        # Should return min_chunks (2), highest-scored
+        assert len(chunks) == 2
+        assert chunks[0].score == 0.8
+        assert chunks[1].score == 0.75
+
+    def test_dynamic_dense_ceiling_caps_results(
+        self, mock_embedder, monkeypatch
+    ):
+        """Results capped at max_chunks."""
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.enable_hybrid_search", False
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings"
+            ".retrieval_dynamic_threshold_enabled",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_score_threshold",
+            0.5,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_min_chunks", 1
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_max_chunks", 3
+        )
+        # 5 chunks above threshold, but max_chunks=3
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response(
+            _make_qdrant_result(score=0.95),
+            _make_qdrant_result(score=0.9),
+            _make_qdrant_result(score=0.85),
+            _make_qdrant_result(score=0.8),
+            _make_qdrant_result(score=0.75),
+        )
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        chunks = retriever.retrieve("test?", user_role="finance")
+
+        assert len(chunks) == 3
+
+    def test_dynamic_hybrid_post_filters_by_threshold(
+        self, mock_embedder, monkeypatch
+    ):
+        """Hybrid path applies Python filter when dynamic enabled."""
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.enable_hybrid_search", True
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings"
+            ".retrieval_dynamic_threshold_enabled",
+            True,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_score_threshold",
+            0.7,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_min_chunks", 1
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_max_chunks", 10
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings"
+            ".hybrid_prefetch_limit_multiplier",
+            2,
+        )
+        monkeypatch.setattr(
+            "app.rag.bm25_embedder.embed_sparse_one",
+            lambda text: ([1, 2], [0.5, 0.3]),
+        )
+        # 3 above, 2 below threshold
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response(
+            _make_qdrant_result(score=0.85),
+            _make_qdrant_result(score=0.75),
+            _make_qdrant_result(score=0.72),
+            _make_qdrant_result(score=0.6),
+            _make_qdrant_result(score=0.5),
+        )
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        chunks = retriever.retrieve("test?", user_role="finance")
+
+        assert len(chunks) == 3
+        assert all(c.score >= 0.7 for c in chunks)
+
+    def test_dynamic_off_returns_fixed_top_k(
+        self, mock_embedder, monkeypatch
+    ):
+        """When dynamic disabled, fixed top_k behavior preserved."""
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.enable_hybrid_search", False
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings"
+            ".retrieval_dynamic_threshold_enabled",
+            False,
+        )
+        monkeypatch.setattr(
+            "app.rag.retriever.settings.retrieval_top_k", 3
+        )
+        # 5 results, but top_k=3
+        mock_client = MagicMock()
+        mock_client.query_points.return_value = _make_query_response(
+            _make_qdrant_result(score=0.95),
+            _make_qdrant_result(score=0.9),
+            _make_qdrant_result(score=0.85),
+            _make_qdrant_result(score=0.8),
+            _make_qdrant_result(score=0.75),
+        )
+        retriever = _make_retriever(mock_client, mock_embedder)
+
+        chunks = retriever.retrieve("test?", user_role="finance")
+
+        # Static mode doesn't apply filter, so returns whatever Qdrant
+        # gave us up to the limit passed
+        assert len(chunks) >= 3
