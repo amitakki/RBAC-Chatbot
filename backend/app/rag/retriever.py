@@ -25,6 +25,37 @@ from app.config import settings
 from ingest.embedder import Embedder
 
 
+def _apply_threshold_filter(
+    chunks: list["RetrievedChunk"],
+    threshold: float,
+    min_chunks: int,
+    max_chunks: int,
+) -> list["RetrievedChunk"]:
+    """Post-retrieval score filter with floor/ceiling guards.
+
+    Used by both dense and hybrid paths when
+    retrieval_dynamic_threshold_enabled=True. Qdrant's score_threshold
+    handles the upper cut on dense search, but hybrid/RRF cannot use it as
+    a kwarg — so Python filtering is the only option for hybrid.
+
+    Args:
+        chunks: Candidates sorted by score descending (as returned by Qdrant).
+        threshold: Minimum acceptable score (maps to retrieval_score_threshold).
+        min_chunks: Floor — return at least this many even if all are below
+            threshold.
+        max_chunks: Ceiling — never return more than this many.
+
+    Returns:
+        Filtered, bounded chunk list sorted by score descending.
+    """
+    filtered = [c for c in chunks if c.score >= threshold]
+    # Floor guard: if strict threshold drops everything, keep the best
+    # min_chunks available so the pipeline always has *something* to work with.
+    if len(filtered) < min_chunks:
+        filtered = chunks[:min_chunks]
+    return filtered[:max_chunks]
+
+
 @dataclass
 class RetrievedChunk:
     text: str
@@ -108,11 +139,19 @@ class RbacRetriever:
                     # score_threshold omitted — incompatible with FusionQuery
                 )
             else:
+                # Dynamic mode over-fetches up to max_chunks so Qdrant's
+                # score_threshold can return a variable number; static mode
+                # keeps the original fixed top_k behaviour.
+                fetch_limit = (
+                    settings.retrieval_max_chunks
+                    if settings.retrieval_dynamic_threshold_enabled
+                    else settings.retrieval_top_k
+                )
                 response = self._client.query_points(
                     collection_name=self._collection,
                     query=vector,
                     query_filter=role_filter,
-                    limit=settings.retrieval_top_k,
+                    limit=fetch_limit,
                     score_threshold=settings.retrieval_score_threshold,
                 )
             results = response.points
@@ -121,7 +160,7 @@ class RbacRetriever:
                 f"Qdrant search failed: {exc}"
             ) from exc
 
-        return [
+        chunks = [
             RetrievedChunk(
                 text=r.payload.get("text", ""),
                 source_file=r.payload.get("source_file", ""),
@@ -130,3 +169,15 @@ class RbacRetriever:
             )
             for r in results
         ]
+
+        if settings.retrieval_dynamic_threshold_enabled:
+            # Qdrant already filtered by score_threshold; the Python call
+            # enforces min_chunks (floor guard) and max_chunks (ceiling cap).
+            chunks = _apply_threshold_filter(
+                chunks,
+                settings.retrieval_score_threshold,
+                settings.retrieval_min_chunks,
+                settings.retrieval_max_chunks,
+            )
+
+        return chunks
