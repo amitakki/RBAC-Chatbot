@@ -2,7 +2,8 @@
 RAG pipeline orchestrator (RC-69).
 
 run_rag() is the single entry point: it embeds the query, retrieves RBAC-
-filtered chunks, assembles the prompt, calls Groq, and returns a RagResult.
+filtered chunks, assembles the prompt, calls the configured LLM, and returns
+a RagResult.
 
 LangSmith tracing is activated automatically when LANGCHAIN_TRACING_V2=true
 and LANGSMITH_API_KEY are set in the environment.
@@ -16,14 +17,15 @@ import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-from langchain_groq import ChatGroq
 from langsmith import traceable
 
 from app.config import settings
 from app.guardrails import GuardBlockedError, apply_output_guard, check_input
 from app.rag.cost_metrics import TokenUsage, emit_token_metrics, parse_usage_metadata
 from app.rag.embedder import get_embedder
+from app.rag.llm_factory import build_chat_model
 from app.rag.prompts.prompt_loader import load_system_prompt
 from app.rag.retriever import RbacRetriever, RetrievedChunk
 
@@ -41,7 +43,7 @@ class RagResult:
     top_score: float
     run_id: str
     prompt_version: str = field(default_factory=lambda: settings.prompt_version)
-    tokens_used: int | None = None        # total tokens from Groq usage_metadata (RC-123)
+    tokens_used: int | None = None        # total tokens from provider usage_metadata (RC-123)
     input_tokens: int | None = None       # prompt token count (RC-143)
     output_tokens: int | None = None      # completion token count (RC-143)
 
@@ -82,7 +84,7 @@ def _build_prompt(
 
 
 def _call_llm_with_retry(
-    llm: ChatGroq, prompt: str
+    llm: BaseChatModel, prompt: str
 ) -> tuple[str | None, TokenUsage | None]:
     """Call the LLM with configurable retries on failure.
 
@@ -97,7 +99,7 @@ def _call_llm_with_retry(
             return response.content, usage
         except Exception:
             logger.exception(
-                "Groq call failed on attempt %s/%s",
+                "LLM call failed on attempt %s/%s",
                 attempt + 1,
                 settings.llm_retry_attempts,
             )
@@ -178,12 +180,7 @@ def run_rag(
         )
 
     # Build LLM client once (shared with optional rewriter)
-    llm = ChatGroq(
-        model=settings.groq_model,
-        temperature=settings.groq_temperature,
-        request_timeout=settings.groq_timeout_seconds,
-        api_key=settings.groq_api_key,
-    )
+    llm = build_chat_model()
 
     # Optional HyDE query rewriting
     effective_query = query
@@ -223,7 +220,12 @@ def run_rag(
     # Optional cross-encoder reranking — narrows chunks before prompt assembly
     if settings.enable_reranking:
         from app.rag.reranker import rerank  # noqa: PLC0415
-        chunks = rerank(effective_query, chunks, top_n=settings.reranker_top_n)
+        chunks = rerank(
+            effective_query,
+            chunks,
+            top_n=settings.reranker_top_n,
+            min_score=settings.reranker_min_score,
+        )
 
     # Zero-result short-circuit — not an error, just no matching docs
     if not chunks:
@@ -301,6 +303,17 @@ def run_rag(
                 "output_tokens": result.output_tokens,
                 "guardrail_triggered": False,
                 "environment": settings.environment,
+                # RC-161: surface dynamic threshold mode in the trace so
+                # LangSmith dashboards can filter/compare runs with and
+                # without threshold-based retrieval.
+                "retrieval_dynamic_threshold_enabled": (
+                    settings.retrieval_dynamic_threshold_enabled
+                ),
+                "score_threshold_used": (
+                    settings.retrieval_score_threshold
+                    if settings.retrieval_dynamic_threshold_enabled
+                    else None
+                ),
             })
             # RC-124: chunk excerpts — Presidio-anonymized, max 200 chars
             run_tree.metadata["chunk_excerpts"] = [
