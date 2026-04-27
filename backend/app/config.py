@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     # Retrieval controls for Qdrant search.
     retrieval_top_k: int = 5
     retrieval_score_threshold: float = 0.55
+    # Dynamic / adaptive retrieval (RC-157).
+    # When enabled, result count is score-driven rather than fixed at
+    # retrieval_top_k. retrieval_score_threshold is reused as the cut-off
+    # value in both dense and hybrid paths.
+    retrieval_dynamic_threshold_enabled: bool = False
+    retrieval_min_chunks: int = 1  # floor: return at least this many
+    retrieval_max_chunks: int = 10  # ceiling: never return more than this
     enable_query_rewrite: bool = False
     enable_multi_query: bool = False
     enable_step_back: bool = False
@@ -82,6 +89,9 @@ class Settings(BaseSettings):
     enable_reranking: bool = False
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_top_n: int = 3
+    # Optional cross-encoder score gate applied inside rerank() when
+    # enable_reranking=True (RC-157). None = count-only cutoff.
+    reranker_min_score: float | None = None
     # Hybrid search (BM25 + dense RRF fusion, optional)
     enable_hybrid_search: bool = False
     bm25_model: str = "Qdrant/bm25"
@@ -108,6 +118,7 @@ class Settings(BaseSettings):
         "langsmith_api_key",
         "hf_token",
         "ollama_model",
+        "reranker_min_score",
         mode="before",
     )
     @classmethod
