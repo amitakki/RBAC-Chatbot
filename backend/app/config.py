@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     enable_hybrid_search: bool = False
     bm25_model: str = "Qdrant/bm25"
     hybrid_prefetch_limit_multiplier: int = 2
+    # Structured query retrieval (listing/filtering queries, optional)
+    # When enabled, "list all X" queries bypass semantic search and use Qdrant scroll
+    # to fetch ALL matching HR records accessible to the user.
+    enable_structured_retrieval: bool = False
 
     # Guardrails
     injection_similarity_threshold: float = 0.85

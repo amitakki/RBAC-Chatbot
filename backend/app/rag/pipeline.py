@@ -27,7 +27,7 @@ from app.rag.cost_metrics import TokenUsage, emit_token_metrics, parse_usage_met
 from app.rag.embedder import get_embedder
 from app.rag.llm_factory import build_chat_model
 from app.rag.prompts.prompt_loader import load_system_prompt
-from app.rag.retriever import RbacRetriever, RetrievedChunk
+from app.rag.retriever import RbacRetriever, RetrievedChunk, RetrieverUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,86 @@ def run_rag(
     # Build LLM client once (shared with optional rewriter)
     llm = build_chat_model()
 
+    # Structured query routing — bypass semantic search for listing/filtering queries
+    if settings.enable_structured_retrieval:
+        from app.rag.query_intent import detect_intent, QueryIntent  # noqa: PLC0415
+        from app.rag.structured_retriever import StructuredRetriever  # noqa: PLC0415
+        _intent = detect_intent(query)
+        if _intent.intent == "structured" and _intent.entity is not None:
+            try:
+                _struct_retriever = StructuredRetriever(
+                    client=_get_qdrant(),
+                    collection=settings.qdrant_collection,
+                )
+                chunks = _struct_retriever.retrieve_all(user_role, _intent.entity)
+                if chunks:
+                    # Structured retrieval succeeded — bypass semantic path
+                    logger.info(
+                        "Structured retrieval matched: %d chunks for user_role=%s, entity=%s",
+                        len(chunks),
+                        user_role,
+                        _intent.entity,
+                    )
+
+                    # Assemble prompt, call LLM, apply output guards
+                    template = _cached_prompt()
+                    history_window = (session_history or [])[-settings.session_history_max_messages :]
+                    prompt = _build_prompt(template, user_role, query, chunks, history_window or None)
+
+                    answer, token_usage = _call_llm_with_retry(llm, prompt)
+                    if answer is None:
+                        answer = (
+                            "The assistant is temporarily unavailable. Please try again shortly."
+                        )
+
+                    # Deduplicate sources preserving order
+                    seen: set[str] = set()
+                    sources: list[str] = []
+                    for c in chunks:
+                        if c.source_file not in seen:
+                            seen.add(c.source_file)
+                            sources.append(c.source_file)
+
+                    # Output guardrails (PII redaction + source boundary enforcement)
+                    guard_out = apply_output_guard(answer, sources, user_role)
+                    answer = guard_out.answer
+                    sources = guard_out.sources
+
+                    result = RagResult(
+                        answer=answer,
+                        sources=sources,
+                        num_chunks=len(chunks),
+                        top_score=chunks[0].score if chunks else 0.0,
+                        run_id=run_id,
+                        tokens_used=token_usage.total_tokens if token_usage else None,
+                        input_tokens=token_usage.input_tokens if token_usage else None,
+                        output_tokens=token_usage.output_tokens if token_usage else None,
+                    )
+
+                    # RC-143/144/145: emit CloudWatch token usage and cost metrics
+                    if settings.cloudwatch_metrics_enabled and token_usage is not None:
+                        _emit_cloudwatch_metrics(token_usage)
+
+                    # LangSmith trace annotation
+                    try:
+                        import langsmith as _ls
+                        _rt = _ls.get_current_run_tree()
+                        if _rt is not None:
+                            _rt.metadata.update({
+                                "retrieval_mode": "structured",
+                                "entity": _intent.entity,
+                                "num_chunks": len(chunks),
+                                "top_score": result.top_score,
+                                "latency_ms": int((time.monotonic() - start_ms) * 1000),
+                            })
+                    except Exception:
+                        pass
+
+                    return result
+            except RetrieverUnavailableError:
+                # Qdrant unavailable — fall through to semantic path
+                logger.warning("Qdrant unavailable during structured retrieval, falling back to semantic")
+
     # Optional HyDE query rewriting
     effective_query = query
     if settings.enable_query_rewrite:
@@ -215,7 +295,7 @@ def run_rag(
     else:
         from app.rag.query_transforms import deduplicate_chunks  # noqa: PLC0415
         chunk_lists = [retriever.retrieve(q, user_role) for q in query_variants]
-        chunks = deduplicate_chunks(chunk_lists)[: settings.retrieval_top_k]
+        chunks = deduplicate_chunks(chunk_lists)
 
     # Optional cross-encoder reranking — narrows chunks before prompt assembly
     if settings.enable_reranking:
@@ -226,6 +306,13 @@ def run_rag(
             top_n=settings.reranker_top_n,
             min_score=settings.reranker_min_score,
         )
+    elif settings.retrieval_dynamic_threshold_enabled:
+        # Even without reranking, apply a score threshold if configured (RC-161)
+        chunks = [
+            c for c in chunks if c.score >= settings.retrieval_score_threshold
+        ]
+    else:
+        chunks = chunks[: settings.retrieval_top_k]
 
     # Zero-result short-circuit — not an error, just no matching docs
     if not chunks:
@@ -239,6 +326,13 @@ def run_rag(
             top_score=0.0,
             run_id=run_id,
         )
+
+    logger.info(
+        "Retrieved %s chunks for user_role=%s (top score=%.4f)",
+        len(chunks),
+        user_role,
+        chunks[0].score,
+    )
 
     # Assemble prompt
     template = _cached_prompt()
