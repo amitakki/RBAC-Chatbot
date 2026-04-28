@@ -28,7 +28,10 @@ def client():
     """Return a TestClient for the FastAPI app."""
     # Ensure env is set before app import so Settings validates
     os.environ.setdefault("JWT_SECRET", _JWT_SECRET)
-    os.environ.setdefault("GROQ_API_KEY", "dummy-groq")
+    if os.getenv("LLM_PROVIDER", "groq").lower() == "ollama":
+        os.environ.setdefault("OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2"))
+    else:
+        os.environ.setdefault("GROQ_API_KEY", "dummy-groq")
     from app.main import app
     return TestClient(app, raise_server_exceptions=True)
 

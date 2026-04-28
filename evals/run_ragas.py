@@ -1,8 +1,8 @@
 """Run Ragas evaluation metrics over a generated answers file.
 
 Reads the latest (or specified) answers_<timestamp>.json produced by
-generate_answers.py, computes five Ragas metrics using the Groq LLM and
-HuggingFace embeddings, checks each metric against a threshold, and
+generate_answers.py, computes five Ragas metrics using the configured LLM
+provider and HuggingFace embeddings, checks each metric against a threshold, and
 writes a ragas_<timestamp>.json report.
 
 Exit code:
@@ -135,6 +135,37 @@ def build_metrics(llm, embeddings):
     ]
 
 
+def build_langchain_llm():
+    provider = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
+    if provider == "ollama":
+        ollama_model = os.environ.get("OLLAMA_MODEL")
+        if not ollama_model:
+            sys.exit("ERROR: OLLAMA_MODEL environment variable is not set for LLM_PROVIDER=ollama.")
+        from langchain_ollama import ChatOllama
+
+        return ChatOllama(
+            model=ollama_model,
+            base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+            temperature=float(os.environ.get("OLLAMA_TEMPERATURE", "0")),
+            client_kwargs={
+                "timeout": int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "10")),
+            },
+        )
+
+    groq_api_key = os.environ.get("GROQ_API_KEY")
+    if not groq_api_key:
+        sys.exit("ERROR: GROQ_API_KEY environment variable is not set for LLM_PROVIDER=groq.")
+
+    from langchain_groq import ChatGroq
+
+    return ChatGroq(
+        model=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        api_key=groq_api_key,
+        temperature=float(os.environ.get("GROQ_TEMPERATURE", "0")),
+        request_timeout=int(os.environ.get("GROQ_TIMEOUT_SECONDS", "10")),
+    )
+
+
 def run(answers_file_arg: Path | None, output_dir: Path) -> bool:
     answers_path = resolve_answers_file(answers_file_arg)
     print(f"\nLoading answers from: {answers_path}")
@@ -142,18 +173,11 @@ def run(answers_file_arg: Path | None, output_dir: Path) -> bool:
     print(f"Evaluating {len(results)} samples with Ragas...\n")
 
     # --- configure LLM and embeddings ---
-    groq_api_key = os.environ.get("GROQ_API_KEY")
-    if not groq_api_key:
-        sys.exit("ERROR: GROQ_API_KEY environment variable is not set.")
-
-    from langchain_groq import ChatGroq
     from langchain_huggingface import HuggingFaceEmbeddings
     from ragas.embeddings import LangchainEmbeddingsWrapper
     from ragas.llms import LangchainLLMWrapper
 
-    llm = LangchainLLMWrapper(
-        ChatGroq(model="llama-3.3-70b-versatile", api_key=groq_api_key)
-    )
+    llm = LangchainLLMWrapper(build_langchain_llm())
     embeddings = LangchainEmbeddingsWrapper(
         HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     )

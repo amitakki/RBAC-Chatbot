@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import logging
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-from langchain_groq import ChatGroq
 
 from app.rag.retriever import RetrievedChunk
 
@@ -44,7 +44,7 @@ _STEP_BACK_TEMPLATE = (
 # Transformers
 # ---------------------------------------------------------------------------
 
-def generate_sub_queries(question: str, llm: ChatGroq, n: int = 3) -> list[str]:
+def generate_sub_queries(question: str, llm: BaseChatModel, n: int = 3) -> list[str]:
     """Return up to *n* sub-queries derived from *question* for multi-query retrieval.
 
     Falls back to ``[question]`` on any LLM failure so the pipeline always
@@ -52,7 +52,7 @@ def generate_sub_queries(question: str, llm: ChatGroq, n: int = 3) -> list[str]:
 
     Args:
         question: The user's original question.
-        llm: Shared ChatGroq instance from the pipeline.
+        llm: Shared chat model instance from the pipeline.
         n: Number of sub-queries to generate.
 
     Returns:
@@ -75,14 +75,14 @@ def generate_sub_queries(question: str, llm: ChatGroq, n: int = 3) -> list[str]:
     return [question]
 
 
-def step_back_query(question: str, llm: ChatGroq) -> str:
+def step_back_query(question: str, llm: BaseChatModel) -> str:
     """Return a broader, step-back version of *question*.
 
     Falls back to *question* unchanged on any LLM failure.
 
     Args:
         question: The user's original question.
-        llm: Shared ChatGroq instance from the pipeline.
+        llm: Shared chat model instance from the pipeline.
 
     Returns:
         The rewritten (broader) query string.

@@ -47,7 +47,8 @@ jobs:
             --base-url "$STAGING_API_URL" \
             --output-dir ../evals/report
 
-      # RC-136: run Ragas evaluation — exits 1 if any metric below threshold
+      # RC-136: run Ragas evaluation — exits 1 if any metric below threshold.
+      # Hosted GitHub Actions remain Groq-backed even though local evals can use Ollama.
       - name: Run Ragas evaluation
         working-directory: backend
         env:
