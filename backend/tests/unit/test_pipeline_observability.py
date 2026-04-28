@@ -31,7 +31,8 @@ class TestCallLlmWithRetry:
 
         content, tokens = _call_llm_with_retry(mock_llm, "What is the answer?")
         assert content == "The answer is 42."
-        assert tokens == 15
+        assert tokens is not None
+        assert tokens.total_tokens == 15
 
     def test_tokens_none_when_usage_metadata_absent(self) -> None:
         mock_response = MagicMock(spec=["content"])
@@ -47,7 +48,7 @@ class TestCallLlmWithRetry:
 
     def test_returns_none_none_on_repeated_failure(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.invoke.side_effect = RuntimeError("groq down")
+        mock_llm.invoke.side_effect = RuntimeError("llm down")
 
         with patch("app.rag.pipeline.time.sleep"):  # don't wait 2s in tests
             content, tokens = _call_llm_with_retry(mock_llm, "question")

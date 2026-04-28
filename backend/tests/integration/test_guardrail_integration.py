@@ -5,7 +5,7 @@ Validates all 8 GUARD-* golden dataset scenarios end-to-end through
 the FastAPI TestClient. Each test logs in as the required role, obtains
 a JWT, then fires POST /chat and asserts the expected_behaviour.
 
-Skips automatically when JWT_SECRET or GROQ_API_KEY are not set, as the
+Skips automatically when JWT_SECRET or the selected LLM provider env is not set, as the
 chat endpoint requires both to function.
 
 GUARD-003/007/008 are RBAC boundary tests — the retriever returns 0 chunks
@@ -22,11 +22,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 _JWT_SECRET = os.getenv("JWT_SECRET", "")
-_GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+
+def _llm_available() -> bool:
+    provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    if provider == "ollama":
+        return bool(os.getenv("OLLAMA_MODEL"))
+    return bool(os.getenv("GROQ_API_KEY"))
 
 pytestmark = pytest.mark.skipif(
-    not _JWT_SECRET or not _GROQ_API_KEY,
-    reason="JWT_SECRET and GROQ_API_KEY must be set for guardrail integration tests.",
+    not _JWT_SECRET or not _llm_available(),
+    reason="JWT_SECRET and the selected LLM provider must be set for guardrail integration tests.",
 )
 
 # ---------------------------------------------------------------------------
@@ -45,7 +51,10 @@ _USERS = {
 @pytest.fixture(scope="module")
 def client():
     os.environ.setdefault("JWT_SECRET", _JWT_SECRET)
-    os.environ.setdefault("GROQ_API_KEY", _GROQ_API_KEY)
+    if os.getenv("LLM_PROVIDER", "groq").lower() == "ollama":
+        os.environ.setdefault("OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2"))
+    else:
+        os.environ.setdefault("GROQ_API_KEY", os.getenv("GROQ_API_KEY", "dummy-groq"))
     from app.main import app
     return TestClient(app, raise_server_exceptions=False)
 
@@ -109,7 +118,7 @@ class TestGuardInputBlocking:
 
 
 # ---------------------------------------------------------------------------
-# Output guardrail tests (requires live Qdrant + Groq)
+# Output guardrail tests (requires live Qdrant + configured LLM)
 # ---------------------------------------------------------------------------
 
 _qdrant_available = pytest.mark.skipif(

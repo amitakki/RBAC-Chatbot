@@ -8,8 +8,8 @@ so the pipeline always degrades gracefully.
 
 from __future__ import annotations
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-from langchain_groq import ChatGroq
 
 
 _REWRITE_TEMPLATE = (
@@ -19,7 +19,7 @@ _REWRITE_TEMPLATE = (
 )
 
 
-def rewrite_query(question: str, llm: ChatGroq) -> str:
+def rewrite_query(question: str, llm: BaseChatModel) -> str:
     """Return a HyDE-expanded query string for better semantic retrieval.
 
     Asks the LLM to produce a hypothetical answer passage, whose embedding
@@ -27,7 +27,7 @@ def rewrite_query(question: str, llm: ChatGroq) -> str:
 
     Args:
         question: The user's original question.
-        llm: A ChatGroq instance (shared with the pipeline to avoid double init).
+        llm: Shared chat model instance from the pipeline.
 
     Returns:
         The rewritten query string, or *question* unchanged if the LLM call fails.

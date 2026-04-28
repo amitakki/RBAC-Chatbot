@@ -36,7 +36,10 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def client():
     os.environ.setdefault("JWT_SECRET", _JWT_SECRET)
-    os.environ.setdefault("GROQ_API_KEY", os.getenv("GROQ_API_KEY", "dummy-groq"))
+    if os.getenv("LLM_PROVIDER", "groq").lower() == "ollama":
+        os.environ.setdefault("OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2"))
+    else:
+        os.environ.setdefault("GROQ_API_KEY", os.getenv("GROQ_API_KEY", "dummy-groq"))
     from app.main import app
     return TestClient(app, raise_server_exceptions=False)
 
